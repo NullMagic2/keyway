@@ -12,6 +12,7 @@ import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
+import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -71,6 +72,9 @@ const LATCHING_ROLES = ['modifier', SHIFT_ROLE, LEVEL3_ROLE];
 const SHIFT_LABELS = 1;
 const LEVEL3_LABELS = 2;
 const CAPS_LOCK_LABELS = 4;
+
+// A Shell that can still run on X11 says which it runs on; later ones are always on Wayland.
+const ON_WAYLAND = Meta.is_wayland_compositor?.() ?? true;
 
 // GNOME 48 named the direction of a box; before it a box was either vertical or not.
 const VERTICAL_BOX = 'orientation' in St.BoxLayout.prototype
@@ -379,6 +383,7 @@ class KeyboardViewer {
         handle.connect('button-press-event', (_actor, event) => this._startDrag(handle, event));
         handle.connect('motion-event', (_actor, event) => this._dragTo(event));
         handle.connect('button-release-event', () => this._endDrag());
+        handle.connect('touch-event', (_actor, event) => this._touchHandle(handle, event));
 
         this._keyArea = new St.Widget();
         this._panel = new St.BoxLayout({style_class: 'keyway-keyboard', reactive: true,
@@ -486,6 +491,7 @@ class KeyboardViewer {
         key.actor.connect('button-press-event', (_actor, event) => this._press(key, event));
         key.actor.connect('button-release-event', () => this._release(key));
         key.actor.connect('leave-event', () => this._release(key));
+        key.actor.connect('touch-event', (_actor, event) => this._touchKey(key, event));
 
         this._keyArea.add_child(key.actor);
         this._keys.push(key);
@@ -523,6 +529,31 @@ class KeyboardViewer {
     _press(key, event) {
         if (event.get_button() !== Clutter.BUTTON_PRIMARY)
             return Clutter.EVENT_PROPAGATE;
+
+        return this._pressKey(key);
+    }
+
+    // A finger does what the mouse button does. On X11 a touch also arrives as pointer events,
+    // which the handlers above take, so only Wayland's touches are acted on here.
+    _touchKey(key, event) {
+        if (!ON_WAYLAND)
+            return Clutter.EVENT_PROPAGATE;
+
+        switch (event.type()) {
+        case Clutter.EventType.TOUCH_BEGIN:
+            return this._pressKey(key);
+        case Clutter.EventType.TOUCH_END:
+        case Clutter.EventType.TOUCH_CANCEL:
+            return this._release(key);
+        default:
+            return Clutter.EVENT_PROPAGATE;
+        }
+    }
+
+    // A second finger on a key already down changes nothing.
+    _pressKey(key) {
+        if (this._held.has(key.code))
+            return Clutter.EVENT_STOP;
 
         if (LATCHING_ROLES.includes(key.role)) {
             this._setLatched(key, !this._latched.has(key.code));
@@ -583,6 +614,32 @@ class KeyboardViewer {
     _startDrag(handle, event) {
         if (event.get_button() !== Clutter.BUTTON_PRIMARY)
             return Clutter.EVENT_PROPAGATE;
+
+        return this._takeHold(handle, event);
+    }
+
+    // A finger moves the keyboard as the mouse does, under the same rule as for a key.
+    _touchHandle(handle, event) {
+        if (!ON_WAYLAND)
+            return Clutter.EVENT_PROPAGATE;
+
+        switch (event.type()) {
+        case Clutter.EventType.TOUCH_BEGIN:
+            return this._takeHold(handle, event);
+        case Clutter.EventType.TOUCH_UPDATE:
+            return this._dragTo(event);
+        case Clutter.EventType.TOUCH_END:
+        case Clutter.EventType.TOUCH_CANCEL:
+            return this._endDrag();
+        default:
+            return Clutter.EVENT_PROPAGATE;
+        }
+    }
+
+    // Everything the pointer or finger does goes to the handle until it lets go.
+    _takeHold(handle, event) {
+        if (this._drag)
+            return Clutter.EVENT_STOP;
 
         const [pointerX, pointerY] = event.get_coords();
 

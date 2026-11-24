@@ -602,6 +602,7 @@ class KeyboardViewer {
 
         key.actor.set_position(x, y);
         key.actor.set_size(width, height);
+        // A touch arrives as these pointer events too, from the X server.
         key.actor.connect('button-press-event', (_actor, event) => this._press(key, event));
         key.actor.connect('button-release-event', () => this._release(key));
         key.actor.connect('leave-event', () => this._release(key));

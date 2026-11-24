@@ -54,6 +54,16 @@ SHELL_POINTER = """(() => {
 })()"""
 SHELL_BUTTON = ("keywayTestPointer.notify_button(GLib.get_monotonic_time(),"
                 " Clutter.BUTTON_PRIMARY, Clutter.ButtonState.%s);")
+# A real touch screen for the Shell, kept alive between calls, with one finger on it.
+SHELL_TOUCH = """(() => {
+    const {Clutter, GLib} = imports.gi;
+    globalThis.keywayTestTouch ??= Clutter.get_default_backend().get_default_seat()
+        .create_virtual_device(Clutter.InputDeviceType.TOUCHSCREEN_DEVICE);
+    keywayTestTouch.%s;
+})()"""
+TOUCH_DOWN = "notify_touch_down(GLib.get_monotonic_time(), 0, %d, %d)"
+TOUCH_MOTION = "notify_touch_motion(GLib.get_monotonic_time(), 0, %d, %d)"
+TOUCH_UP = "notify_touch_up(GLib.get_monotonic_time(), 0)"
 HOLD_SUPER_TAP_SPACE = "['KEY_Super_L', 1], ['KEY_space', 1], ['KEY_space', 0]"
 HOLD_SHIFT_SUPER_TAP_SPACE = "['KEY_Shift_L', 1], " + HOLD_SUPER_TAP_SPACE
 RELEASE_SUPER = "['KEY_Super_L', 0]"
@@ -699,6 +709,57 @@ def test_on_screen_keyboard(router, window_script, config_path):
     window.close()
 
 
+def touch(action):
+    desktop_eval(SHELL_TOUCH % action)
+
+
+def tap(actor):
+    touch(TOUCH_DOWN % centre_of(actor))
+    touch(TOUCH_UP)
+
+
+def test_on_screen_keyboard_by_touch(window_script):
+    """Runs only on GNOME: an X server has no touch screen here, and sends touches as clicks."""
+    window = TestWindow(window_script, "entry")
+    window.wait_for_focus(expect_text_input=True)
+
+    def typed(text):
+        return lambda: bool(window.lines) and window.lines[-1] == f"TEXT {text}"
+
+    desktop_eval(f"{keyboard()}.show()")
+    wait_until("the keyboard is shown for touching", lambda: key_shows(KEY_Q, "q"))
+
+    tap(f"{keyboard_key(KEY_Q)}.actor")
+    wait_until("a tapped key types into the focused window", typed("q"))
+
+    tap(f"{keyboard_key(KEY_LEFT_SHIFT)}.actor")
+    wait_until("a tap holds Shift for the next key", lambda: key_shows(KEY_Q, "Q"))
+    tap(f"{keyboard_key(KEY_Q)}.actor")
+    wait_until("which is typed shifted", typed("qQ"))
+    wait_until("and Shift goes up after the tap", lambda: key_shows(KEY_Q, "q"))
+
+    before = keyboard_position()
+    x, y = centre_of(f"{keyboard()}._name")
+
+    touch(TOUCH_DOWN % (x, y))
+    wait_until("a finger on the title takes hold of the keyboard",
+               lambda: '"true"' in desktop_eval(f"String(!!{keyboard()}._drag)"))
+    touch(TOUCH_MOTION % (x + DRAG_DISTANCE[0], y + DRAG_DISTANCE[1]))
+    wait_until("and moves it",
+               lambda: keyboard_position() == (before[0] + DRAG_DISTANCE[0],
+                                               before[1] + DRAG_DISTANCE[1]))
+    touch(TOUCH_UP)
+    wait_until("until it is lifted",
+               lambda: '"false"' in desktop_eval(f"String(!!{keyboard()}._drag)"))
+
+    tap(f"{keyboard()}._panel.get_first_child().get_last_child()")
+    wait_until("a tap on the close button hides the keyboard", lambda: not keyboard_is_shown())
+    check("the window kept the focus through the touches",
+          window.title in desktop_eval("global.display.focus_window?.title"))
+
+    window.close()
+
+
 def test_shortcuts_switch_layouts(router):
     check("starts on br", active_source() == "br", active_source())
 
@@ -1161,6 +1222,10 @@ def main():
             test_replaces_the_desktop_switcher()
             test_taskbar_menu_opens_the_settings_window()
             test_on_screen_keyboard(router, window_script, config_path)
+
+            if isinstance(desktop, GnomeDesktop):
+                test_on_screen_keyboard_by_touch(window_script)
+
             test_shortcuts_switch_layouts(router)
 
             if isinstance(desktop, GnomeDesktop):
