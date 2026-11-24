@@ -87,6 +87,7 @@ installs them. Device access needs the planned udev rule and system service.
 
 ```text
 keyway/
+|-- README.md                       What Keyway is and how to install it
 |-- ARCHITECTURE.md                 This overview
 |-- STYLE_GUIDE.md                  Code, input safety and documentation rules
 |-- LICENSE                         MIT license
