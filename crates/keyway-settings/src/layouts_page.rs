@@ -9,6 +9,7 @@ use crate::source_list::SourceEntry;
 use crate::widgets::LayoutBadges;
 use crate::widgets::{self, DIM, SMALL};
 use gtk::prelude::*;
+use keyway_core::config::KeyboardTheme;
 use keyway_desktop::layout_catalog::CatalogEntry;
 
 const ROW_ACTION_SPACING: i32 = 2;
@@ -130,6 +131,7 @@ pub struct LayoutsPage {
     pub add_button: gtk::Button,
     pub per_window: gtk::Switch,
     pub flags: gtk::Switch,
+    pub keyboard_theme: gtk::ComboBoxText,
     pub system_keyboard: Option<gtk::Button>,
     pub restart: RestartControl,
 }
@@ -180,6 +182,24 @@ impl LayoutsPage {
             Some(flags.upcast_ref()),
         ));
 
+        let keyboard_theme = gtk::ComboBoxText::new();
+
+        for theme in KeyboardTheme::ALL {
+            let name = match theme {
+                KeyboardTheme::Light => Message::ThemeLight,
+                KeyboardTheme::Dark => Message::ThemeDark,
+            };
+
+            keyboard_theme.append(Some(theme.name()), text(language, name));
+        }
+
+        options.add(&widgets::row(
+            text(language, Message::KeyboardColors),
+            Some(text(language, Message::KeyboardColorsNote)),
+            None,
+            Some(keyboard_theme.upcast_ref()),
+        ));
+
         let system_keyboard = has_system_keyboard.then(|| {
             let button = gtk::Button::with_label(text(language, Message::Open));
             options.add(&widgets::row(
@@ -202,6 +222,7 @@ impl LayoutsPage {
             add_button,
             per_window,
             flags,
+            keyboard_theme,
             system_keyboard,
             restart,
         }

@@ -1,0 +1,147 @@
+/*
+ * Module: keyway.extension.keyboard_style
+ * Purpose: The look of the on-screen keyboard that both desktop extensions draw.
+ * Created: 2026-11-24
+ * Architecture: Installed beside each extension, which loads it itself, so that keyway restart
+ * brings a changed look without a new login. Shapes come first, then the colours of the light
+ * and the dark theme; the keyboard carries the class of the one the user chose.
+ */
+
+.keyway-keyboard {
+    border-radius: 14px;
+    padding: 6px 12px 12px 12px;
+}
+
+.keyway-keyboard-title {
+    padding: 2px 0 8px 4px;
+}
+
+.keyway-keyboard-handle {
+    spacing: 8px;
+}
+
+.keyway-keyboard-flag {
+    icon-size: 18px;
+}
+
+.keyway-keyboard-name {
+    font-size: 13px;
+    font-weight: bold;
+}
+
+.keyway-keyboard-close {
+    border-radius: 99px;
+    padding: 6px;
+}
+
+.keyway-keyboard-close-icon {
+    icon-size: 14px;
+}
+
+.keyway-key {
+    border-radius: 7px;
+    font-size: 17px;
+}
+
+/* Keys that type no character of the layout carry a smaller name. */
+.keyway-key-named {
+    font-size: 12px;
+}
+
+/* Light: white keys on a pale panel, with the keys that type no character a shade darker. */
+
+.keyway-keyboard-light {
+    background-color: rgba(236, 236, 240, 0.98);
+    border: 1px solid rgba(0, 0, 0, 0.16);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3);
+    color: #1e1e24;
+}
+
+.keyway-keyboard-light .keyway-keyboard-name,
+.keyway-keyboard-light .keyway-keyboard-close {
+    color: #44444d;
+}
+
+.keyway-keyboard-light .keyway-keyboard-close:hover {
+    background-color: rgba(0, 0, 0, 0.1);
+    color: #1e1e24;
+}
+
+.keyway-keyboard-light .keyway-key {
+    background-color: #ffffff;
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.22);
+    color: #1e1e24;
+}
+
+.keyway-keyboard-light .keyway-key:hover {
+    background-color: #f1f4fb;
+}
+
+.keyway-keyboard-light .keyway-key:active {
+    background-color: #c9d3e6;
+}
+
+.keyway-keyboard-light .keyway-key-named {
+    background-color: #d2d2da;
+    color: #3a3a43;
+}
+
+.keyway-keyboard-light .keyway-key-named:hover {
+    background-color: #c5c5cf;
+}
+
+.keyway-keyboard-light .keyway-key-named:active {
+    background-color: #adadb9;
+}
+
+/* Dark: the same arrangement on a near-black panel. */
+
+.keyway-keyboard-dark {
+    background-color: rgba(34, 34, 38, 0.97);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+    color: #f4f4f6;
+}
+
+.keyway-keyboard-dark .keyway-keyboard-name,
+.keyway-keyboard-dark .keyway-keyboard-close {
+    color: #d4d4da;
+}
+
+.keyway-keyboard-dark .keyway-keyboard-close:hover {
+    background-color: rgba(255, 255, 255, 0.14);
+    color: #ffffff;
+}
+
+.keyway-keyboard-dark .keyway-key {
+    background-color: #4d4d55;
+    color: #ffffff;
+}
+
+.keyway-keyboard-dark .keyway-key:hover {
+    background-color: #5c5c65;
+}
+
+.keyway-keyboard-dark .keyway-key:active {
+    background-color: #77777f;
+}
+
+.keyway-keyboard-dark .keyway-key-named {
+    background-color: #313137;
+    color: #c6c6cd;
+}
+
+.keyway-keyboard-dark .keyway-key-named:hover {
+    background-color: #3f3f46;
+}
+
+.keyway-keyboard-dark .keyway-key-named:active {
+    background-color: #5c5c65;
+}
+
+/* In both: a modifier held for the next key, and Caps Lock while it is on. */
+.keyway-keyboard-light .keyway-key:checked,
+.keyway-keyboard-dark .keyway-key:checked {
+    background-color: #3584e4;
+    color: #ffffff;
+}

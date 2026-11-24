@@ -299,6 +299,16 @@ impl Runtime {
                         log_state(&format!("could not set the indicator's flags: {error}"));
                     }
                 }
+                AgentAction::SetKeyboard(keyboard) => {
+                    if let Err(error) = self.shell.set_keyboard(&keyboard) {
+                        log_state(&format!("could not set the on-screen keyboard: {error}"));
+                    }
+                }
+                AgentAction::SetKeyboardTheme(theme) => {
+                    if let Err(error) = self.shell.set_keyboard_theme(theme) {
+                        log_state(&format!("could not set the keyboard's colours: {error}"));
+                    }
+                }
                 AgentAction::Send(message) => self.send_to_router(&message),
                 AgentAction::DropRouter => {
                     log_state("router speaks another protocol version");

@@ -110,7 +110,9 @@ write_tree() {
     local extension_file
 
     for desktop in gnome-shell:gnome cinnamon:cinnamon; do
-        for extension_file in "$project_dir/extension/${desktop#*:}/keyway@local"/*; do
+        # The on-screen keyboard's stylesheet is one file, which each extension has a copy of.
+        for extension_file in "$project_dir/extension/${desktop#*:}/keyway@local"/* \
+            "$project_dir/extension/keyboard.css"; do
             install -D -m 644 -t "$root/usr/share/${desktop%:*}/extensions/keyway@local" \
                 -- "$extension_file"
         done
@@ -138,7 +140,7 @@ write_tree() {
         third_party_notices
     } > "$doc_dir/copyright"
 
-    printf '%s (%s) stable; urgency=medium\n\n  * Keyway is under the MIT license, and the package now says so.\n\n -- %s  %s\n' \
+    printf '%s (%s) stable; urgency=medium\n\n  * An on-screen keyboard, in light or dark, opens from the taskbar menu.\n\n -- %s  %s\n' \
         "$PACKAGE_NAME" "$2" "$maintainer" "$(date -R)" \
         | gzip -9n > "$doc_dir/changelog.gz"
 }

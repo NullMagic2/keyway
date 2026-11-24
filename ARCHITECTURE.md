@@ -110,6 +110,7 @@ keyway/
 |   |   |   |-- hotkey.rs           Shortcut parsing and chord state machine
 |   |   |   |-- key_codes.rs        Key code, key event and modifier types
 |   |   |   |-- key_interpreter.rs  One decision per key from both state machines
+|   |   |   |-- keyboard_view.rs    Rows, widths and roles of the on-screen keyboard's keys
 |   |   |   |-- layout_id.rs        Validated input source identifier
 |   |   |   |-- layout_labels.rs    Taskbar code and flag for each layout
 |   |   |   `-- protocol.rs         Router and agent socket messages
@@ -138,7 +139,7 @@ keyway/
 |   |       |-- desktop_shell.rs    D-Bus client for the desktop extensions
 |   |       |-- layout_catalog.rs   Read layouts and variants from evdev.xml
 |   |       |-- restart.rs          Restart the extension, the agent and the router
-|   |       `-- xkb.rs              Only unsafe code here: is Right Alt AltGr on a layout?
+|   |       `-- xkb.rs              Only unsafe code here: a layout's key labels and its AltGr
 |   |-- keyway/                     User agent and command line tool
 |   |   |-- Cargo.toml
 |   |   `-- src/
@@ -168,8 +169,9 @@ keyway/
 |       `-- tests/
 |           `-- settings_window.rs  Real window with real input, on a private X server
 |-- extension/                      Desktop extensions, embedded by keyway setup
+|   |-- keyboard.css                The on-screen keyboard's light and dark look, for both
 |   |-- gnome/keyway@local/
-|   |   |-- adapter.js              GNOME Shell: D-Bus adapter and Keyway's indicator
+|   |   |-- adapter.js              GNOME Shell: D-Bus adapter, indicator and on-screen keyboard
 |   |   |-- extension.js            Loads adapter.js, and again when keyway restart asks
 |   |   `-- metadata.json
 |   `-- cinnamon/keyway@local/

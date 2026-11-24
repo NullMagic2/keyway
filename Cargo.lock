@@ -679,7 +679,7 @@ dependencies = [
 
 [[package]]
 name = "keyway"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "keyway-core",
  "keyway-desktop",
@@ -688,7 +688,7 @@ dependencies = [
 
 [[package]]
 name = "keyway-core"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "serde",
  "serde_json",
@@ -697,7 +697,7 @@ dependencies = [
 
 [[package]]
 name = "keyway-desktop"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "keyway-core",
  "roxmltree",
@@ -706,7 +706,7 @@ dependencies = [
 
 [[package]]
 name = "keyway-router"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "keyway-core",
  "libc",
@@ -715,7 +715,7 @@ dependencies = [
 
 [[package]]
 name = "keyway-settings"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "gtk",
  "keyway-core",

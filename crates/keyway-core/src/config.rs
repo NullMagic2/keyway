@@ -23,6 +23,7 @@ pub struct Config {
     pub switching: SwitchingConfig,
     pub alt_codes: AltCodesConfig,
     pub indicator: IndicatorConfig,
+    pub keyboard: KeyboardConfig,
     pub devices: DevicesConfig,
 }
 
@@ -96,6 +97,38 @@ impl Default for IndicatorConfig {
     fn default() -> Self {
         Self { flags: true }
     }
+}
+
+/// The on-screen keyboard's colours.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KeyboardTheme {
+    #[default]
+    Light,
+    Dark,
+}
+
+impl KeyboardTheme {
+    pub const ALL: [Self; 2] = [Self::Light, Self::Dark];
+
+    /// The name the configuration and the desktop extensions know this theme by.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|theme| theme.name() == name)
+    }
+}
+
+/// How the on-screen keyboard looks.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct KeyboardConfig {
+    pub theme: KeyboardTheme,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -260,6 +293,7 @@ mod tests {
         let is_syntax_error = |text| matches!(Config::parse(text), Err(ConfigError::Syntax(_)));
 
         assert!(is_syntax_error("unknown_option = true"));
+        assert!(is_syntax_error("[keyboard]\ntheme = \"sepia\""));
         assert!(is_syntax_error("[switching]\nnext = \"Alt\""));
         assert!(is_syntax_error(
             "[alt_codes.code_pages]\nbr = { oem = 932, ansi = 1252 }"
@@ -297,12 +331,17 @@ mod tests {
             [indicator]
             flags = false
 
+            [keyboard]
+            theme = "dark"
+
             [devices]
             exclude = ["Macro pad"]
         "#;
         let config = Config::parse(text).unwrap();
         let defaults = Config::default();
 
+        assert_eq!(config.keyboard.theme, KeyboardTheme::Dark);
+        assert_eq!(defaults.keyboard.theme, KeyboardTheme::Light);
         assert_eq!(Config::parse(&config.to_toml().unwrap()).unwrap(), config);
         assert_eq!(
             Config::parse(&defaults.to_toml().unwrap()).unwrap(),

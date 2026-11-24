@@ -1,6 +1,6 @@
 // Module: keyway.extension.cinnamon
-// Purpose: Give the Keyway agent the input source and text APIs only Cinnamon has, and replace
-// the keyboard applet with Keyway's own indicator.
+// Purpose: Give the Keyway agent the input source and text APIs only Cinnamon has, replace the
+// keyboard applet with Keyway's own indicator, and draw its on-screen keyboard.
 // Created: 2026-11-08
 // Architecture: A thin D-Bus adapter with no policy; crates/keyway-desktop is its client, and
 // the GNOME extension offers the same interface. Cinnamon changed its layout system in 6.6, so
@@ -10,9 +10,11 @@
 const Clutter = imports.gi.Clutter;
 const Gio = imports.gi.Gio;
 const GLib = imports.gi.GLib;
+const Meta = imports.gi.Meta;
 const St = imports.gi.St;
 const XApp = imports.gi.XApp;
 const CinnamonApps = imports.gi.Cinnamon;
+const Config = imports.misc.config;
 const AppletManager = imports.ui.appletManager;
 const Main = imports.ui.main;
 const PopupMenu = imports.ui.popupMenu;
@@ -33,6 +35,11 @@ const SETTINGS_LABELS = {
     pt: 'Configurações do Keyway',
     el: 'Ρυθμίσεις Keyway',
 };
+const KEYBOARD_LABELS = {
+    en: 'On-screen keyboard',
+    pt: 'Teclado virtual',
+    el: 'Εικονικό πληκτρολόγιο',
+};
 const DEFAULT_LABEL_LANGUAGE = 'en';
 const INDICATOR_NAME = 'keyway-indicator';
 const LEFT_MOUSE_BUTTON = 1;
@@ -40,6 +47,42 @@ const ENABLED_APPLETS_CHANGED = 'changed::enabled-applets';
 const LABELS_FILE = 'keyway/layout_labels.json';
 const FLAGS_DIRECTORY = 'keyway/flags';
 const FLAG_EXTENSION = '.svg';
+const KEYBOARD_STYLESHEET = 'keyboard.css';
+const CLOSE_ICON = 'window-close-symbolic';
+
+// The keyboard's colours, as the configuration names them; each is a style class with this
+// prefix. Light until the agent passes on the user's choice.
+const KEYBOARD_THEMES = ['light', 'dark'];
+const KEYBOARD_THEME_CLASS = 'keyway-keyboard-';
+
+// An ordinary key's side, the space between keys and the space under the keyboard where it
+// first appears, in pixels before the desktop's scale. The agent gives widths in quarter keys.
+const KEY_SIZE = 46;
+const KEY_SPACING = 5;
+const KEYBOARD_BOTTOM_MARGIN = 28;
+const QUARTERS_PER_KEY = 4;
+
+// Icon sizes in the keyboard's title, which this toolkit takes from the code, not the style.
+const KEYBOARD_FLAG_SIZE = 18;
+const CLOSE_ICON_SIZE = 14;
+
+// Cinnamon before 6.8 hands a key code to the X server as it is, and the server's codes are the
+// evdev ones plus eight. From 6.8, and on Wayland, its keyboard device takes evdev codes.
+const X_KEY_CODE_OFFSET = 8;
+const FIRST_VERSION_TAKING_EVDEV_CODES = [6, 8];
+
+// Key roles, as keyway-core names them. A latching key stays down until the next plain key.
+const GAP_ROLE = 'gap';
+const PLAIN_ROLE = 'plain';
+const SHIFT_ROLE = 'shift';
+const LEVEL3_ROLE = 'level3';
+const CAPS_LOCK_ROLE = 'caps_lock';
+const LATCHING_ROLES = ['modifier', SHIFT_ROLE, LEVEL3_ROLE];
+
+// A character key has a label for each combination of these, at the sum of the active ones.
+const SHIFT_LABELS = 1;
+const LEVEL3_LABELS = 2;
+const CAPS_LOCK_LABELS = 4;
 
 // Flag sizes before the desktop's scale, as Cinnamon's own keyboard applet draws them in its
 // menu, and in the panel until the panel's own icon size is known.
@@ -70,6 +113,12 @@ const INTERFACE_XML = `
     </method>
     <method name="ShowFlags">
       <arg type="b" name="shown" direction="in"/>
+    </method>
+    <method name="SetKeyboard">
+      <arg type="aa(uusas)" name="rows" direction="in"/>
+    </method>
+    <method name="SetKeyboardTheme">
+      <arg type="s" name="theme" direction="in"/>
     </method>
     <signal name="ActiveSourceChanged">
       <arg type="s" name="source_id"/>
@@ -211,12 +260,28 @@ function createLayouts(onSourcesChanged, onActiveChanged) {
         onSourcesChanged, onActiveChanged);
 }
 
+// Returns what to add to an evdev key code for this Cinnamon's keyboard device.
+function keyCodeOffset() {
+    if (Meta.is_wayland_compositor())
+        return 0;
+
+    const [major, minor] = Config.PACKAGE_VERSION.split('.').map(Number);
+    const [firstMajor, firstMinor] = FIRST_VERSION_TAKING_EVDEV_CODES;
+    const takesEvdevCodes = major > firstMajor || (major === firstMajor && minor >= firstMinor);
+
+    return takesEvdevCodes ? 0 : X_KEY_CODE_OFFSET;
+}
+
 class KeywayService {
-    // The listener's sourcesChanged and activeChanged are called as Cinnamon reports each, and
-    // flagsChanged when the agent passes on the user's choice.
+    // The listener's sourcesChanged and activeChanged are called as Cinnamon reports each,
+    // flagsChanged when the agent passes on the user's choice, keyboardChanged when it describes
+    // the active layout's keys, and keyboardThemeChanged when it names their colours.
     constructor(listener) {
         this._listener = listener;
         this.flagsShown = true;
+        this.keyboardRows = [];
+        [this.keyboardTheme] = KEYBOARD_THEMES;
+        this._keyCodeOffset = keyCodeOffset();
         this._dbus = Gio.DBusExportedObject.wrapJSObject(INTERFACE_XML, this);
         this._layouts = createLayouts(
             () => {
@@ -282,6 +347,30 @@ class KeywayService {
         this.flagsShown = shown;
         this._listener.flagsChanged();
     }
+
+    // Each row lists its places from the left: evdev key code, width in quarters of a key, role
+    // and labels.
+    SetKeyboard(rows) {
+        this.keyboardRows = rows;
+        this._listener.keyboardChanged();
+    }
+
+    SetKeyboardTheme(theme) {
+        if (!KEYBOARD_THEMES.includes(theme))
+            throw new Error(`Unknown keyboard theme: ${theme}`);
+
+        this.keyboardTheme = theme;
+        this._listener.keyboardThemeChanged();
+    }
+
+    // Presses or releases a key by its evdev code, as a keyboard would; the active layout
+    // decides what it types.
+    notifyKey(keyCode, pressed) {
+        const time = Clutter.get_current_event_time() * MICROSECONDS_PER_MILLISECOND;
+        const state = pressed ? Clutter.KeyState.PRESSED : Clutter.KeyState.RELEASED;
+
+        this._virtualKeyboard.notify_key(time, keyCode + this._keyCodeOffset, state);
+    }
 }
 
 // Each layout's label and flag, from the table that keyway setup or the package installs. A
@@ -322,20 +411,354 @@ class LayoutLabels {
     }
 }
 
-// Returns the menu label in the first of the desktop's languages that has one.
-function settingsLabel() {
+// Returns a menu label in the first of the desktop's languages that has one.
+function menuLabel(labels) {
     const languages = GLib.get_language_names().map(name => name.split(/[_.@]/)[0]);
-    const language = languages.find(name => name in SETTINGS_LABELS);
+    const language = languages.find(name => name in labels);
 
-    return SETTINGS_LABELS[language ?? DEFAULT_LABEL_LANGUAGE];
+    return labels[language ?? DEFAULT_LABEL_LANGUAGE];
 }
 
-// The layout switcher in the panel: the active layout's flag and label, such as PT-BR, and a
-// menu of the layouts by their full names.
-class KeywayIndicator {
+// The keyboard's look, from the file of that name beside this one. Cinnamon would load a file
+// called stylesheet.css by itself; this name is the one the GNOME extension must use.
+class KeyboardStyle {
+    constructor(extensionDirectory) {
+        this._path = GLib.build_filenamev([extensionDirectory, KEYBOARD_STYLESHEET]);
+
+        try {
+            this._theme().load_stylesheet(this._path);
+        } catch (error) {
+            global.logError(error);
+            this._path = null;
+        }
+    }
+
+    // Cinnamon makes a new theme when its own style changes, and carries this stylesheet over.
+    _theme() {
+        return St.ThemeContext.get_for_stage(global.stage).get_theme();
+    }
+
+    destroy() {
+        if (this._path)
+            this._theme().unload_stylesheet(this._path);
+    }
+}
+
+// The on-screen keyboard: the active layout's keys as the agent lays them out, in a panel that
+// can be moved by its title. Cinnamon's own keyboard device presses a clicked key, and a click
+// on something Cinnamon draws takes no focus, so the window being typed in receives the key.
+class KeyboardViewer {
     constructor(service, labels) {
         this._service = service;
         this._labels = labels;
+        this._panel = null;
+        this._keys = [];
+        this._held = new Set();
+        this._latched = new Set();
+        this._position = null;
+        this._drag = null;
+
+        this._keymap = Clutter.get_default_backend().get_default_seat().get_keymap();
+        this._keymapId = this._keymap.connect('state-changed', () => this._showLabels());
+    }
+
+    destroy() {
+        this.hide();
+        this._keymap.disconnect(this._keymapId);
+    }
+
+    toggle() {
+        if (this._panel)
+            this.hide();
+        else
+            this.show();
+    }
+
+    show() {
+        if (this._panel)
+            return;
+
+        this._flag = new St.Icon({style_class: 'keyway-keyboard-flag',
+            icon_size: Math.round(KEYBOARD_FLAG_SIZE * global.ui_scale)});
+        this._name = new St.Label({style_class: 'keyway-keyboard-name',
+            y_align: Clutter.ActorAlign.CENTER});
+
+        // The handle moves the keyboard. The close button is beside it, not in it, so that a
+        // press on the button never starts a move.
+        const handle = new St.BoxLayout({style_class: 'keyway-keyboard-handle', reactive: true});
+        const close = new St.Button({style_class: 'keyway-keyboard-close',
+            child: new St.Icon({style_class: 'keyway-keyboard-close-icon', icon_name: CLOSE_ICON,
+                icon_type: St.IconType.SYMBOLIC,
+                icon_size: Math.round(CLOSE_ICON_SIZE * global.ui_scale)})});
+        const title = new St.BoxLayout({style_class: 'keyway-keyboard-title'});
+
+        handle.add_child(this._flag);
+        handle.add_child(this._name);
+        title.add(handle, {expand: true});
+        title.add_child(close);
+        close.connect('clicked', () => this.hide());
+        handle.connect('button-press-event', (_actor, event) => this._startDrag(handle, event));
+        handle.connect('motion-event', (_actor, event) => this._dragTo(event));
+        handle.connect('button-release-event', () => this._endDrag());
+
+        this._keyArea = new St.Widget();
+        this._panel = new St.BoxLayout({style_class: 'keyway-keyboard', reactive: true,
+            vertical: true});
+        this._panel.add_child(title);
+        this._panel.add_child(this._keyArea);
+
+        // Above windows, full screen ones included, and part of what takes clicks.
+        Main.layoutManager.addChrome(this._panel, {visibleInFullscreen: true});
+
+        this.showTheme();
+        this.showLayout();
+        this.showKeys();
+    }
+
+    hide() {
+        if (!this._panel)
+            return;
+
+        this._releaseAll();
+        this._endDrag();
+        Main.layoutManager.removeChrome(this._panel);
+        this._panel.destroy();
+        this._panel = null;
+        this._keys = [];
+    }
+
+    // Gives the keyboard the colours the user chose.
+    showTheme() {
+        if (!this._panel)
+            return;
+
+        for (const theme of KEYBOARD_THEMES)
+            this._panel.remove_style_class_name(`${KEYBOARD_THEME_CLASS}${theme}`);
+
+        this._panel.add_style_class_name(`${KEYBOARD_THEME_CLASS}${this._service.keyboardTheme}`);
+    }
+
+    // Names the active layout in the title, with its flag when the indicator shows flags.
+    showLayout() {
+        if (!this._panel)
+            return;
+
+        const activeId = this._service.ActiveSource();
+        const active = this._service.ListSources().find(([id]) => id === activeId);
+        const flag = this._service.flagsShown ? this._labels.flag(activeId) : null;
+
+        this._name.text = active?.[2] ?? '';
+        this._flag.gicon = flag;
+        this._flag.visible = Boolean(flag);
+    }
+
+    // Draws the keys the agent last described, each row from the left.
+    showKeys() {
+        if (!this._panel)
+            return;
+
+        this._releaseAll();
+        this._keyArea.destroy_all_children();
+        this._keys = [];
+
+        const rowHeight = KEY_SIZE * global.ui_scale;
+        const quarter = rowHeight / QUARTERS_PER_KEY;
+        const spacing = KEY_SPACING * global.ui_scale;
+        const rows = this._service.keyboardRows;
+        let widest = 0;
+
+        rows.forEach((row, rowIndex) => {
+            let quarters = 0;
+
+            for (const [code, width, role, labels] of row) {
+                const left = Math.round(quarters * quarter);
+                const right = Math.round((quarters + width) * quarter);
+
+                if (role !== GAP_ROLE) {
+                    this._addKey({code, role, labels}, left, rowIndex * rowHeight,
+                        right - left - spacing, rowHeight - spacing);
+                }
+
+                quarters += width;
+            }
+
+            widest = Math.max(widest, quarters);
+        });
+
+        this._keyArea.set_size(Math.max(Math.round(widest * quarter) - spacing, 0),
+            Math.max(rows.length * rowHeight - spacing, 0));
+        this._showLabels();
+        this._place();
+    }
+
+    _addKey(key, x, y, width, height) {
+        key.label = new St.Label();
+        key.actor = new St.Bin({style_class: 'keyway-key', reactive: true, track_hover: true,
+            child: key.label});
+
+        // A key with one label types nothing that the layout decides.
+        if (key.labels.length === 1)
+            key.actor.add_style_class_name('keyway-key-named');
+
+        key.actor.set_position(x, y);
+        key.actor.set_size(width, height);
+        key.actor.connect('button-press-event', (_actor, event) => this._press(key, event));
+        key.actor.connect('button-release-event', () => this._release(key));
+        key.actor.connect('leave-event', () => this._release(key));
+
+        this._keyArea.add_child(key.actor);
+        this._keys.push(key);
+    }
+
+    _isLatched(role) {
+        return this._keys.some(key => key.role === role && this._latched.has(key.code));
+    }
+
+    // Shows each key's label for the modifiers held here and the desktop's Caps Lock.
+    _showLabels() {
+        if (!this._panel)
+            return;
+
+        const capsLock = this._keymap.get_caps_lock_state();
+        const state = (this._isLatched(SHIFT_ROLE) ? SHIFT_LABELS : 0) +
+            (this._isLatched(LEVEL3_ROLE) ? LEVEL3_LABELS : 0) +
+            (capsLock ? CAPS_LOCK_LABELS : 0);
+
+        for (const key of this._keys) {
+            key.label.text = key.labels[key.labels.length === 1 ? 0 : state] ?? '';
+
+            if (key.role === CAPS_LOCK_ROLE)
+                this._mark(key, 'checked', capsLock);
+        }
+    }
+
+    _mark(key, pseudoClass, marked) {
+        if (marked)
+            key.actor.add_style_pseudo_class(pseudoClass);
+        else
+            key.actor.remove_style_pseudo_class(pseudoClass);
+    }
+
+    _press(key, event) {
+        if (event.get_button() !== LEFT_MOUSE_BUTTON)
+            return Clutter.EVENT_PROPAGATE;
+
+        if (LATCHING_ROLES.includes(key.role)) {
+            this._setLatched(key, !this._latched.has(key.code));
+            this._showLabels();
+
+            return Clutter.EVENT_STOP;
+        }
+
+        this._held.add(key.code);
+        this._mark(key, 'active', true);
+        this._service.notifyKey(key.code, true);
+
+        return Clutter.EVENT_STOP;
+    }
+
+    // Also when the pointer leaves a key, so that no key stays down behind it.
+    _release(key) {
+        if (!this._held.delete(key.code))
+            return Clutter.EVENT_PROPAGATE;
+
+        this._mark(key, 'active', false);
+        this._service.notifyKey(key.code, false);
+
+        // The modifiers held for this key have done their work.
+        if (key.role === PLAIN_ROLE)
+            this._releaseLatched();
+
+        return Clutter.EVENT_STOP;
+    }
+
+    _setLatched(key, latched) {
+        if (latched)
+            this._latched.add(key.code);
+        else
+            this._latched.delete(key.code);
+
+        this._mark(key, 'checked', latched);
+        this._service.notifyKey(key.code, latched);
+    }
+
+    _releaseLatched() {
+        for (const key of this._keys) {
+            if (this._latched.has(key.code))
+                this._setLatched(key, false);
+        }
+
+        this._showLabels();
+    }
+
+    // Nothing this keyboard pressed may stay down once its keys are gone.
+    _releaseAll() {
+        for (const key of this._keys)
+            this._release(key);
+
+        this._releaseLatched();
+    }
+
+    // The pointer's device sends everything to the handle until the button is released.
+    _startDrag(handle, event) {
+        if (event.get_button() !== LEFT_MOUSE_BUTTON)
+            return Clutter.EVENT_PROPAGATE;
+
+        const [pointerX, pointerY] = event.get_coords();
+
+        this._drag = {
+            offsetX: pointerX - this._panel.x,
+            offsetY: pointerY - this._panel.y,
+            device: event.get_device(),
+        };
+        this._drag.device.grab(handle);
+
+        return Clutter.EVENT_STOP;
+    }
+
+    _dragTo(event) {
+        if (!this._drag)
+            return Clutter.EVENT_PROPAGATE;
+
+        const [pointerX, pointerY] = event.get_coords();
+
+        this._position = [pointerX - this._drag.offsetX, pointerY - this._drag.offsetY];
+        this._place();
+
+        return Clutter.EVENT_STOP;
+    }
+
+    _endDrag() {
+        this._drag?.device.ungrab();
+        this._drag = null;
+
+        return Clutter.EVENT_PROPAGATE;
+    }
+
+    // Where the user left it, or else centred at the bottom of the primary monitor's free area.
+    // Always wholly on the screen, so the title stays within reach.
+    _place() {
+        const [, , width, height] = this._panel.get_preferred_size();
+        const workspace = global.workspace_manager.get_active_workspace();
+        const area = workspace.get_work_area_for_monitor(global.display.get_primary_monitor());
+        const [x, y] = this._position ?? [
+            area.x + (area.width - width) / 2,
+            area.y + area.height - height - KEYBOARD_BOTTOM_MARGIN * global.ui_scale,
+        ];
+        const within = (value, limit) => Math.round(Math.max(0, Math.min(value, limit)));
+
+        this._panel.set_position(within(x, global.stage.width - width),
+            within(y, global.stage.height - height));
+    }
+}
+
+// The layout switcher in the panel: the active layout's flag and label, such as PT-BR, and a
+// menu of the layouts by their full names, the on-screen keyboard and the settings window.
+class KeywayIndicator {
+    constructor(service, labels, viewer) {
+        this._service = service;
+        this._labels = labels;
+        this._viewer = viewer;
         this._items = new Map();
 
         this.actor = new St.BoxLayout({name: INDICATOR_NAME, style_class: 'applet-box',
@@ -361,7 +784,8 @@ class KeywayIndicator {
         this._layoutSection = new PopupMenu.PopupMenuSection();
         this.menu.addMenuItem(this._layoutSection);
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        this.menu.addAction(settingsLabel(),
+        this.menu.addAction(menuLabel(KEYBOARD_LABELS), () => viewer.toggle());
+        this.menu.addAction(menuLabel(SETTINGS_LABELS),
             () => CinnamonApps.AppSystem.get_default().lookup_app(SETTINGS_APP_ID)?.activate());
 
         this.actor.connect('button-press-event', (_actor, event) => {
@@ -521,23 +945,41 @@ class KeyboardAppletReplacement {
     }
 }
 
+let extensionDirectory = null;
 let service = null;
+let keyboardStyle = null;
+let viewer = null;
 let indicator = null;
 let appletReplacement = null;
 let nameId = 0;
 
-function init(_metadata) {
+function init(metadata) {
+    extensionDirectory = metadata.path;
 }
 
 function enable() {
     const starting = new KeywayService({
-        sourcesChanged: () => indicator?.showLayouts(),
-        activeChanged: () => indicator?.showActive(),
-        flagsChanged: () => indicator?.showLayouts(),
+        sourcesChanged: () => {
+            indicator?.showLayouts();
+            viewer?.showLayout();
+        },
+        activeChanged: () => {
+            indicator?.showActive();
+            viewer?.showLayout();
+        },
+        flagsChanged: () => {
+            indicator?.showLayouts();
+            viewer?.showLayout();
+        },
+        keyboardChanged: () => viewer?.showKeys(),
+        keyboardThemeChanged: () => viewer?.showTheme(),
     });
+    const labels = new LayoutLabels();
 
     service = starting;
-    indicator = new KeywayIndicator(starting, new LayoutLabels());
+    keyboardStyle = new KeyboardStyle(extensionDirectory);
+    viewer = new KeyboardViewer(starting, labels);
+    indicator = new KeywayIndicator(starting, labels, viewer);
     appletReplacement = new KeyboardAppletReplacement(indicator);
 
     // Owning the name is what tells the agent to start asking, so the layouts come first.
@@ -561,6 +1003,10 @@ function disable() {
     appletReplacement = null;
     indicator.destroy();
     indicator = null;
+    viewer.destroy();
+    viewer = null;
+    keyboardStyle.destroy();
+    keyboardStyle = null;
     service.destroy();
     service = null;
 }

@@ -4,7 +4,9 @@
 //! Architecture: The desktop owns its source list; this only reads it and asks for changes.
 //! The GNOME and Cinnamon extensions under extension/ are the other end of this interface.
 
-use crate::xkb::right_alt_is_altgr;
+use crate::xkb::{LayoutKeymap, right_alt_is_altgr};
+use keyway_core::config::KeyboardTheme;
+use keyway_core::keyboard_view::{KeyboardView, ViewCell};
 use keyway_core::layout_id::LayoutId;
 use std::collections::HashMap;
 use std::fmt;
@@ -23,6 +25,14 @@ const DBUS_NAME: &str = "org.freedesktop.DBus";
 const DBUS_PATH: &str = "/org/freedesktop/DBus";
 const NAME_OWNER_CHANGED: &str = "NameOwnerChanged";
 const NAME_ARGUMENT: u8 = 0;
+
+/// How the interface writes a place of the on-screen keyboard that has no key.
+const GAP_ROLE: &str = "gap";
+const GAP_KEY_CODE: u32 = 0;
+
+/// One place of the on-screen keyboard as the interface carries it: evdev key code, width in
+/// quarters of a key, role and labels.
+type WireCell<'a> = (u32, u32, &'static str, &'a [String]);
 
 /// The GNOME extension's loader, which is on the Shell's own bus name so that it can be reached
 /// while no adapter is running.
@@ -112,12 +122,27 @@ pub struct InputSource {
     pub short_name: String,
 }
 
-/// The desktop's input state at one moment.
+/// The desktop's input state at one moment. The keyboard is the active layout's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DesktopSnapshot {
     pub sources: Vec<InputSource>,
     pub active: LayoutId,
     pub right_alt_is_altgr: bool,
+    pub keyboard: KeyboardView,
+}
+
+fn wire_cell(cell: &ViewCell) -> WireCell<'_> {
+    let quarters = u32::from(cell.width().quarters());
+
+    match cell {
+        ViewCell::Gap(_) => (GAP_KEY_CODE, quarters, GAP_ROLE, &[]),
+        ViewCell::Key(key) => (
+            u32::from(key.key.raw()),
+            quarters,
+            key.role.name(),
+            &key.labels,
+        ),
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -145,12 +170,17 @@ impl DesktopShell {
             .iter()
             .find(|source| source.id == active)
             .map_or(&active, |source| &source.xkb_id);
-        let right_alt_is_altgr = right_alt_is_altgr(active_xkb_id, &xkb_options);
+        let keymap = LayoutKeymap::compile(active_xkb_id, &xkb_options);
+        let right_alt_is_altgr = right_alt_is_altgr(keymap.as_ref());
+        let labels_of = |key| keymap.as_ref().map(|keymap| keymap.key_labels(key));
+        let keyboard =
+            KeyboardView::new(|key| labels_of(key).unwrap_or_default(), right_alt_is_altgr);
 
         Ok(DesktopSnapshot {
             sources,
             active,
             right_alt_is_altgr,
+            keyboard,
         })
     }
 
@@ -188,6 +218,22 @@ impl DesktopShell {
     /// Tells the extension whether its indicator shows country flags.
     pub fn show_flags(&self, shown: bool) -> Result<(), DesktopError> {
         Ok(self.proxy.call("ShowFlags", &(shown,))?)
+    }
+
+    /// Tells the extension what its on-screen keyboard draws.
+    pub fn set_keyboard(&self, keyboard: &KeyboardView) -> Result<(), DesktopError> {
+        let rows: Vec<Vec<WireCell>> = keyboard
+            .rows
+            .iter()
+            .map(|row| row.iter().map(wire_cell).collect())
+            .collect();
+
+        Ok(self.proxy.call("SetKeyboard", &(rows,))?)
+    }
+
+    /// Tells the extension which colours its on-screen keyboard has.
+    pub fn set_keyboard_theme(&self, theme: KeyboardTheme) -> Result<(), DesktopError> {
+        Ok(self.proxy.call("SetKeyboardTheme", &(theme.name(),))?)
     }
 
     fn name_has_owner(&self, name: &str) -> Result<bool, DesktopError> {

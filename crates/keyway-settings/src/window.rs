@@ -17,7 +17,7 @@ use crate::widgets::{self, LayoutBadges};
 use gtk::glib;
 use gtk::prelude::*;
 use keyway_core::code_pages::{CodePageCatalog, LayoutCodePages};
-use keyway_core::config::Config;
+use keyway_core::config::{Config, KeyboardTheme};
 use keyway_core::layout_id::LayoutId;
 use keyway_core::layout_labels::LayoutLabels;
 use keyway_desktop::config_file::{
@@ -410,6 +410,22 @@ impl SettingsApp {
         {
             let with_app = with_app.clone();
 
+            app.layouts.keyboard_theme.connect_changed(move |combo| {
+                let theme = combo
+                    .active_id()
+                    .and_then(|id| KeyboardTheme::from_name(&id));
+
+                with_app(&|app| {
+                    if let Some(theme) = theme {
+                        app.change_config(|config| config.keyboard.theme = theme);
+                    }
+                });
+            });
+        }
+
+        {
+            let with_app = with_app.clone();
+
             app.shortcuts.order.connect_changed(move |combo| {
                 let id = combo
                     .active_id()
@@ -502,6 +518,9 @@ impl SettingsApp {
             .per_window
             .set_active(self.input_sources.per_window());
         self.layouts.flags.set_active(config.indicator.flags);
+        self.layouts
+            .keyboard_theme
+            .set_active_id(Some(config.keyboard.theme.name()));
         self.shortcuts
             .order
             .set_active_id(Some(ShortcutsPage::order_id(config.switching.order)));

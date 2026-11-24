@@ -9,6 +9,7 @@ The fake router stands in for key input, which a headless desktop has no devices
 
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -43,6 +44,16 @@ SHELL_KEYS = """(() => {
         keywayTestKeyboard.notify_keyval(GLib.get_monotonic_time(), Clutter[key],
             state ? Clutter.KeyState.PRESSED : Clutter.KeyState.RELEASED);
 })()"""
+# A real pointer for the Shell, kept alive between calls: a move, then a button change if any.
+SHELL_POINTER = """(() => {
+    const {Clutter, GLib} = imports.gi;
+    globalThis.keywayTestPointer ??= Clutter.get_default_backend().get_default_seat()
+        .create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE);
+    keywayTestPointer.notify_absolute_motion(GLib.get_monotonic_time(), %d, %d);
+    %s
+})()"""
+SHELL_BUTTON = ("keywayTestPointer.notify_button(GLib.get_monotonic_time(),"
+                " Clutter.BUTTON_PRIMARY, Clutter.ButtonState.%s);")
 HOLD_SUPER_TAP_SPACE = "['KEY_Super_L', 1], ['KEY_space', 1], ['KEY_space', 0]"
 HOLD_SHIFT_SUPER_TAP_SPACE = "['KEY_Shift_L', 1], " + HOLD_SUPER_TAP_SPACE
 RELEASE_SUPER = "['KEY_Super_L', 0]"
@@ -150,6 +161,12 @@ class GnomeDesktop:
                     "--method", "org.gnome.Shell.Screenshot.Screenshot",
                     "false", "false", str(path))
 
+    def pointer(self, x, y, pressed=None):
+        """Moves the pointer, then presses or releases its button unless pressed is None."""
+        button = "" if pressed is None else SHELL_BUTTON % ("PRESSED" if pressed else "RELEASED")
+
+        desktop_eval(SHELL_POINTER % (x, y, button))
+
 
 class CinnamonDesktop:
     """Cinnamon 6.4 and older on a private X server, whose daemon applies the layouts."""
@@ -207,6 +224,12 @@ class CinnamonDesktop:
 
         if result.returncode != 0:
             print(f"screenshot failed: {result.stderr.strip()}", flush=True)
+
+    def pointer(self, x, y, pressed=None):
+        """Moves the pointer, then presses or releases its button unless pressed is None."""
+        button = [] if pressed is None else ["mousedown" if pressed else "mouseup", "1"]
+
+        run_quietly("xdotool", "mousemove", str(x), str(y), *button)
 
 
 class InputSourceCinnamonDesktop(CinnamonDesktop):
@@ -446,7 +469,7 @@ def keyway_indicator_exists():
     return '"true"' in desktop_eval(f"String(!!{desktop.indicator})")
 
 
-def screenshot_indicator_menu():
+def save_screenshot(name):
     """Only when a run asks for screenshots, as they take time and no check depends on them."""
     directory = os.environ.get("KEYWAY_SCREENSHOT_DIR")
 
@@ -454,9 +477,13 @@ def screenshot_indicator_menu():
         return
 
     Path(directory).mkdir(parents=True, exist_ok=True)
-    desktop_eval(f"{desktop.indicator}.menu.open()")
     time.sleep(SCREENSHOT_SECONDS)
-    desktop.save_screenshot(Path(directory) / "indicator-menu.png")
+    desktop.save_screenshot(Path(directory) / name)
+
+
+def screenshot_indicator_menu():
+    desktop_eval(f"{desktop.indicator}.menu.open()")
+    save_screenshot("indicator-menu.png")
     desktop_eval(f"{desktop.indicator}.menu.close()")
 
 
@@ -503,6 +530,173 @@ def test_taskbar_menu_opens_the_settings_window():
     desktop_eval("global.display.focus_window.delete(global.get_current_time())")
     wait_until("the settings window closes",
                lambda: '"Keyway"' not in desktop_eval("global.display.focus_window?.title"))
+
+
+# Evdev codes of the keys the on-screen keyboard test clicks, and its menu entry.
+KEY_1 = 2
+KEY_Q = 16
+KEY_A = 30
+KEY_LEFT_SHIFT = 42
+KEY_CAPS_LOCK = 58
+KEY_ABNT_EXTRA = 89
+KEY_RIGHT_ALT = 100
+KEYBOARD_MENU_LABEL = "On-screen keyboard"
+DRAG_DISTANCE = (60, -40)
+
+
+def keyboard():
+    return f"{desktop.indicator}._viewer"
+
+
+def keyboard_is_shown():
+    return '"true"' in desktop_eval(f"String(!!{keyboard()}?._panel)")
+
+
+def keyboard_key(code):
+    return f"{keyboard()}._keys.find(key => key.code === {code})"
+
+
+def key_shows(code, text):
+    """True when the key is drawn with this label. The text travels as an ASCII literal."""
+    return '"true"' in desktop_eval(f"String({keyboard_key(code)}?.label.text === {json.dumps(text)})")
+
+
+def key_is_marked(code, pseudo_class):
+    return '"true"' in desktop_eval(
+        f"String({keyboard_key(code)}.actor.has_style_pseudo_class('{pseudo_class}'))")
+
+
+def centre_of(actor):
+    """Returns the middle of an actor on the screen, where a click reaches it."""
+    result = desktop_eval(
+        f"(() => {{ const actor = {actor};"
+        " const [x, y] = actor.get_transformed_position();"
+        " const [width, height] = actor.get_transformed_size();"
+        " return [Math.round(x + width / 2), Math.round(y + height / 2)].join(','); })()")
+    x, y = re.search(r"(-?\d+),(-?\d+)", result).groups()
+
+    return int(x), int(y)
+
+
+def click(actor):
+    x, y = centre_of(actor)
+
+    desktop.pointer(x, y, pressed=True)
+    desktop.pointer(x, y, pressed=False)
+
+
+def click_key(code):
+    click(f"{keyboard_key(code)}.actor")
+
+
+def keyboard_position():
+    result = desktop_eval(f"[{keyboard()}._panel.x, {keyboard()}._panel.y].join(',')")
+    x, y = re.search(r"(-?\d+),(-?\d+)", result).groups()
+
+    return int(x), int(y)
+
+
+def keyboard_has_theme(theme):
+    return '"true"' in desktop_eval(
+        f"String({keyboard()}._panel.has_style_class_name('keyway-keyboard-{theme}'))")
+
+
+def test_on_screen_keyboard(router, window_script, config_path):
+    """Real clicks on the keyboard, with a window that must keep the focus and get the keys."""
+    wait_until("the taskbar menu offers the on-screen keyboard",
+               lambda: KEYBOARD_MENU_LABEL in settings_menu_labels())
+    check("which is hidden until asked for", not keyboard_is_shown())
+
+    window = TestWindow(window_script, "entry")
+    window.wait_for_focus(expect_text_input=True)
+
+    def typed(text):
+        return lambda: bool(window.lines) and window.lines[-1] == f"TEXT {text}"
+
+    def window_has_focus():
+        return window.title in desktop_eval("global.display.focus_window?.title")
+
+    desktop_eval(f"{desktop.indicator}.menu._getMenuItems()"
+                 f".find(item => item.label?.text === '{KEYBOARD_MENU_LABEL}').activate(null)")
+    wait_until("choosing it shows the keyboard", keyboard_is_shown)
+    wait_until("with the Brazilian layout's letters", lambda: key_shows(KEY_Q, "q"))
+    check("its title names the layout",
+          "Portuguese (Brazil)" in desktop_eval(f"{keyboard()}._name.text"),
+          desktop_eval(f"{keyboard()}._name.text"))
+    check("the ABNT2 key is drawn where the layout uses it", key_shows(KEY_ABNT_EXTRA, "/"))
+    check("showing it leaves the window focused", window_has_focus())
+    check("it is light unless the user chose otherwise", keyboard_has_theme("light"))
+    save_screenshot("keyboard.png")
+
+    click_key(KEY_Q)
+    wait_until("a clicked key types into the focused window", typed("q"))
+    check("which keeps the focus", window_has_focus())
+
+    click_key(KEY_LEFT_SHIFT)
+    wait_until("Shift stays down and the keys show capitals", lambda: key_shows(KEY_Q, "Q"))
+    check("Shift is marked as held", key_is_marked(KEY_LEFT_SHIFT, "checked"))
+    save_screenshot("keyboard-shift.png")
+    click_key(KEY_Q)
+    wait_until("the next key is typed shifted", typed("qQ"))
+    wait_until("and Shift goes up after it", lambda: key_shows(KEY_Q, "q"))
+
+    click_key(KEY_RIGHT_ALT)
+    wait_until("AltGr shows the third level", lambda: key_shows(KEY_1, "\u00b9"))
+    click_key(KEY_1)
+    wait_until("and types it", typed("qQ\u00b9"))
+
+    click_key(KEY_CAPS_LOCK)
+    wait_until("Caps Lock shows capitals while it is on", lambda: key_shows(KEY_Q, "Q"))
+    check("leaves the digits alone", key_shows(KEY_1, "1"))
+    check("and is marked as on", key_is_marked(KEY_CAPS_LOCK, "checked"))
+    click_key(KEY_CAPS_LOCK)
+    wait_until("and lower case again once it is off", lambda: key_shows(KEY_Q, "q"))
+
+    router.send(select_layout("gr+simple"))
+    wait_until("the keyboard follows a switch to Greek", lambda: key_shows(KEY_A, "\u03b1"))
+    check("its title follows too", "Greek" in desktop_eval(f"{keyboard()}._name.text"))
+    check("the ABNT2 key goes where the layout has nothing on it",
+          '"false"' in desktop_eval(f"String(!!{keyboard_key(KEY_ABNT_EXTRA)})"))
+    click_key(KEY_A)
+    wait_until("a clicked key types the Greek letter", typed("qQ\u00b9\u03b1"))
+    save_screenshot("keyboard-greek.png")
+
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text('[keyboard]\ntheme = "dark"\n')
+    wait_until("choosing the dark theme darkens the keyboard while it is open",
+               lambda: keyboard_has_theme("dark") and not keyboard_has_theme("light"))
+    save_screenshot("keyboard-dark.png")
+    click_key(KEY_LEFT_SHIFT)
+    wait_until("Shift on the dark keyboard", lambda: key_shows(KEY_A, "\u0391"))
+    save_screenshot("keyboard-dark-shift.png")
+    click_key(KEY_LEFT_SHIFT)
+    config_path.unlink()
+    wait_until("and without the choice it is light again", lambda: keyboard_has_theme("light"))
+    router.next_configuration()
+    router.next_configuration()
+
+    before = keyboard_position()
+    x, y = centre_of(f"{keyboard()}._name")
+
+    desktop.pointer(x, y, pressed=True)
+    wait_until("pressing the title takes hold of the keyboard",
+               lambda: '"true"' in desktop_eval(f"String(!!{keyboard()}._drag)"))
+    desktop.pointer(x + DRAG_DISTANCE[0], y + DRAG_DISTANCE[1])
+    wait_until("dragging it moves the keyboard",
+               lambda: keyboard_position() == (before[0] + DRAG_DISTANCE[0],
+                                               before[1] + DRAG_DISTANCE[1]))
+    desktop.pointer(x + DRAG_DISTANCE[0], y + DRAG_DISTANCE[1], pressed=False)
+    wait_until("and releasing lets go of it",
+               lambda: '"false"' in desktop_eval(f"String(!!{keyboard()}._drag)"))
+
+    click(f"{keyboard()}._panel.get_first_child().get_last_child()")
+    wait_until("its close button hides it", lambda: not keyboard_is_shown())
+    check("the window still has the focus", window_has_focus())
+
+    router.send(select_layout("br"))
+    wait_until("back on br after the keyboard", lambda: active_source() == "br")
+
+    window.close()
 
 
 def test_shortcuts_switch_layouts(router):
@@ -966,6 +1160,7 @@ def main():
             test_waits_for_extension_then_configures(router)
             test_replaces_the_desktop_switcher()
             test_taskbar_menu_opens_the_settings_window()
+            test_on_screen_keyboard(router, window_script, config_path)
             test_shortcuts_switch_layouts(router)
 
             if isinstance(desktop, GnomeDesktop):

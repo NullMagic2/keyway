@@ -15,6 +15,8 @@ Keyway is a keyboard language switcher for Linux that works like the one in Wind
 - **Types characters by Alt code.** Hold Alt and type a number on the keypad: Alt+130 gives é.
 - **Shows the active layout in the taskbar**, with its flag and code, such as PT-BR, and a
   menu to pick another.
+- **Has an on-screen keyboard** that shows where the active layout puts each character, and
+  types the keys you click.
 - **Has a settings window** for layouts, shortcuts and Alt codes, in English, Portuguese and
   Greek.
 

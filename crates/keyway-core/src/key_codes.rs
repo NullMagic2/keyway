@@ -42,6 +42,14 @@ impl KeyCode {
     pub const MASK_KEY: Self = Self(194);
 
     pub const ESCAPE: Self = Self(1);
+    pub const CAPS_LOCK: Self = Self(58);
+    pub const PRINT_SCREEN: Self = Self(99);
+
+    /// The key beside the left Shift of ISO and ABNT2 keyboards.
+    pub const ISO_EXTRA: Self = Self(86);
+
+    /// The key beside the right Shift of ABNT2 keyboards.
+    pub const ABNT_EXTRA: Self = Self(89);
 
     pub const fn new(raw: u16) -> Self {
         Self(raw)

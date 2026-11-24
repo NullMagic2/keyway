@@ -71,6 +71,10 @@ pub enum Message {
     PerWindowNote,
     ShowFlags,
     ShowFlagsNote,
+    KeyboardColors,
+    KeyboardColorsNote,
+    ThemeLight,
+    ThemeDark,
     SystemKeyboard,
     SystemKeyboardNote,
     Open,
@@ -226,6 +230,26 @@ pub const fn text(language: Language, message: Message) -> &'static str {
             Br => "Ao lado do código de cada layout, como PT-BR, na barra de tarefas e aqui.",
             Pt => "Ao lado do código de cada esquema, como PT-PT, na barra de tarefas e aqui.",
             El => "Δίπλα στον κωδικό κάθε διάταξης, όπως EL-GR, στη γραμμή εργασιών και εδώ.",
+        },
+        M::KeyboardColors => match language {
+            En => "On-screen keyboard colors",
+            Br | Pt => "Cores do teclado virtual",
+            El => "Χρώματα εικονικού πληκτρολογίου",
+        },
+        M::KeyboardColorsNote => match language {
+            En => "The keyboard opens from Keyway's menu in the taskbar.",
+            Br | Pt => "O teclado abre pelo menu do Keyway na barra de tarefas.",
+            El => "Το πληκτρολόγιο ανοίγει από το μενού του Keyway στη γραμμή εργασιών.",
+        },
+        M::ThemeLight => match language {
+            En => "Light",
+            Br | Pt => "Claro",
+            El => "Φωτεινό",
+        },
+        M::ThemeDark => match language {
+            En => "Dark",
+            Br | Pt => "Escuro",
+            El => "Σκούρο",
         },
         M::SystemKeyboard => match language {
             En => "System keyboard settings",

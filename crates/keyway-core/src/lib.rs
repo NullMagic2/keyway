@@ -12,6 +12,7 @@ pub mod config;
 pub mod hotkey;
 pub mod key_codes;
 pub mod key_interpreter;
+pub mod keyboard_view;
 pub mod layout_id;
 pub mod layout_labels;
 pub mod protocol;

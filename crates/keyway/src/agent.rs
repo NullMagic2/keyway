@@ -6,8 +6,9 @@
 
 use keyway_core::alt_code::AltCodeEntry;
 use keyway_core::code_pages::{CodePageCatalog, LayoutCodePages};
-use keyway_core::config::{Config, SwitchOrder};
+use keyway_core::config::{Config, KeyboardTheme, SwitchOrder};
 use keyway_core::hotkey::ShortcutAction;
+use keyway_core::keyboard_view::KeyboardView;
 use keyway_core::layout_id::LayoutId;
 use keyway_core::protocol::{AgentMessage, PROTOCOL_VERSION, RouterMessage};
 use keyway_desktop::desktop_shell::{DesktopSnapshot, InputSource};
@@ -18,6 +19,8 @@ pub enum AgentAction {
     Activate(LayoutId),
     CommitText(String),
     ShowFlags(bool),
+    SetKeyboard(KeyboardView),
+    SetKeyboardTheme(KeyboardTheme),
     Send(AgentMessage),
     DropRouter,
 }
@@ -74,12 +77,17 @@ impl Agent {
 
     pub fn config_changed(&mut self, config: Config) -> Vec<AgentAction> {
         let flags_changed = config.indicator.flags != self.config.indicator.flags;
+        let theme_changed = config.keyboard.theme != self.config.keyboard.theme;
         let mut actions = Vec::new();
 
         self.config = config;
 
         if flags_changed && self.desktop_available() {
             actions.push(AgentAction::ShowFlags(self.config.indicator.flags));
+        }
+
+        if theme_changed && self.desktop_available() {
+            actions.push(AgentAction::SetKeyboardTheme(self.config.keyboard.theme));
         }
 
         if self.router_ready {
@@ -89,13 +97,24 @@ impl Agent {
         actions
     }
 
-    /// Records a new desktop state. A newly started extension learns the flag choice, and the
-    /// router learns if Right Alt's role changed.
+    /// Records a new desktop state. A newly started extension learns the flag choice and the
+    /// keyboard's colours, the extension learns the keyboard of a layout it has not drawn, and
+    /// the router learns if Right Alt's role changed.
     pub fn desktop_changed(&mut self, snapshot: DesktopSnapshot) -> Vec<AgentAction> {
         let mut actions = Vec::new();
 
         if !self.desktop_available() {
             actions.push(AgentAction::ShowFlags(self.config.indicator.flags));
+            actions.push(AgentAction::SetKeyboardTheme(self.config.keyboard.theme));
+        }
+
+        let keyboard_drawn = self
+            .desktop
+            .as_ref()
+            .is_some_and(|old| old.keyboard == snapshot.keyboard);
+
+        if !keyboard_drawn {
+            actions.push(AgentAction::SetKeyboard(snapshot.keyboard.clone()));
         }
 
         let altgr_changed = self
@@ -240,6 +259,7 @@ impl Agent {
 mod tests {
     use super::*;
     use keyway_core::alt_code::AltCodeRadix;
+    use keyway_core::keyboard_view::KeyLabels;
 
     fn id(text: &str) -> LayoutId {
         LayoutId::try_from(text.to_string()).unwrap()
@@ -254,12 +274,24 @@ mod tests {
         }
     }
 
+    /// A keyboard whose every character key shows the layout's name.
+    fn keyboard(layout: &str, right_alt_is_altgr: bool) -> KeyboardView {
+        let labels = |_key| KeyLabels::from_states(|_state| layout.to_string());
+
+        KeyboardView::new(labels, right_alt_is_altgr)
+    }
+
     fn snapshot(sources: &[&str], active: &str, right_alt_is_altgr: bool) -> DesktopSnapshot {
         DesktopSnapshot {
             sources: sources.iter().map(|text| source(text)).collect(),
             active: id(active),
             right_alt_is_altgr,
+            keyboard: keyboard(active, right_alt_is_altgr),
         }
+    }
+
+    fn set_keyboard(layout: &str) -> AgentAction {
+        AgentAction::SetKeyboard(keyboard(layout, true))
     }
 
     fn agent_with(config_text: &str) -> Agent {
@@ -502,6 +534,7 @@ mod tests {
             sources: vec![engine],
             active: id("hangul"),
             right_alt_is_altgr: true,
+            keyboard: KeyboardView::default(),
         });
 
         assert_eq!(typed(&mut agent, "152"), commit("α"));
@@ -568,7 +601,7 @@ mod tests {
         let mut agent = switching_agent("", "br");
         let unready = agent.desktop_changed(snapshot(&["br", "us"], "us", false));
 
-        assert_eq!(unready, []);
+        assert_eq!(unready, [AgentAction::SetKeyboard(keyboard("us", false))]);
 
         agent.router_message(RouterMessage::Hello {
             version: PROTOCOL_VERSION,
@@ -579,7 +612,10 @@ mod tests {
 
         assert_eq!(
             ready,
-            [AgentAction::Send(AgentMessage::SetAllowRightAlt(false))]
+            [
+                set_keyboard("br"),
+                AgentAction::Send(AgentMessage::SetAllowRightAlt(false))
+            ]
         );
         assert_eq!(unchanged, []);
     }
@@ -615,7 +651,11 @@ mod tests {
 
         assert_eq!(
             agent.desktop_changed(snapshot(&["br"], "br", true)),
-            [AgentAction::ShowFlags(false)]
+            [
+                AgentAction::ShowFlags(false),
+                AgentAction::SetKeyboardTheme(KeyboardTheme::Light),
+                set_keyboard("br")
+            ]
         );
         assert_eq!(agent.desktop_changed(snapshot(&["br"], "br", true)), []);
         assert_eq!(
@@ -628,7 +668,44 @@ mod tests {
         assert_eq!(agent.config_changed(without_flags), []);
         assert_eq!(
             agent.desktop_changed(snapshot(&["br"], "br", true)),
-            [AgentAction::ShowFlags(false)]
+            [
+                AgentAction::ShowFlags(false),
+                AgentAction::SetKeyboardTheme(KeyboardTheme::Light),
+                set_keyboard("br")
+            ]
+        );
+    }
+
+    #[test]
+    fn the_extension_learns_the_keyboard_colours_when_they_change() {
+        let mut agent = switching_agent("", "br");
+        let dark = Config::parse("[keyboard]\ntheme = \"dark\"").unwrap();
+
+        assert_eq!(
+            agent.config_changed(dark.clone()),
+            [AgentAction::SetKeyboardTheme(KeyboardTheme::Dark)]
+        );
+        assert_eq!(agent.config_changed(dark), []);
+
+        agent.desktop_lost();
+
+        assert_eq!(agent.config_changed(Config::default()), []);
+    }
+
+    #[test]
+    fn the_extension_learns_the_keyboard_of_each_layout_it_has_not_drawn() {
+        let mut agent = agent_with("");
+        let sources = ["br", "gr+simple"];
+
+        agent.desktop_changed(snapshot(&sources, "br", true));
+
+        assert_eq!(
+            agent.desktop_changed(snapshot(&sources, "gr+simple", true)),
+            [set_keyboard("gr+simple")]
+        );
+        assert_eq!(
+            agent.desktop_changed(snapshot(&sources, "gr+simple", true)),
+            []
         );
     }
 }

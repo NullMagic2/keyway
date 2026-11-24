@@ -54,8 +54,15 @@ const ENABLED_EXTENSIONS_KEY: &str = "enabled-extensions";
 const DISABLED_EXTENSIONS_KEY: &str = "disabled-extensions";
 const EXECUTABLE_MODE: u32 = 0o755;
 
+/// The on-screen keyboard's look, which both extensions load from beside their own files.
+const KEYBOARD_STYLESHEET: (&str, &str) = (
+    "keyboard.css",
+    include_str!("../../../extension/keyboard.css"),
+);
+
 /// Each desktop's extension files, by name and contents.
-const GNOME_EXTENSION_FILES: [(&str, &str); 3] = [
+const GNOME_EXTENSION_FILES: [(&str, &str); 4] = [
+    KEYBOARD_STYLESHEET,
     (
         "extension.js",
         include_str!("../../../extension/gnome/keyway@local/extension.js"),
@@ -69,7 +76,8 @@ const GNOME_EXTENSION_FILES: [(&str, &str); 3] = [
         include_str!("../../../extension/gnome/keyway@local/metadata.json"),
     ),
 ];
-const CINNAMON_EXTENSION_FILES: [(&str, &str); 2] = [
+const CINNAMON_EXTENSION_FILES: [(&str, &str); 3] = [
+    KEYBOARD_STYLESHEET,
     (
         "extension.js",
         include_str!("../../../extension/cinnamon/keyway@local/extension.js"),
@@ -511,6 +519,13 @@ mod tests {
                 .exists()
         );
         assert!(paths.gnome_extension_directory.join("adapter.js").exists());
+
+        for extension in [
+            &paths.gnome_extension_directory,
+            &paths.cinnamon_extension_directory,
+        ] {
+            assert!(extension.join("keyboard.css").exists());
+        }
         assert!(
             paths
                 .cinnamon_extension_directory

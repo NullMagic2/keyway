@@ -35,6 +35,11 @@ unicode_above_255 = false
 # Show the layout's country flag beside its code, such as PT-BR, in the taskbar and its menu.
 flags = true
 
+[keyboard]
+# The colours of the on-screen keyboard, which opens from Keyway's taskbar menu: "light" or
+# "dark".
+theme = "light"
+
 [devices]
 # Device names the router must never grab.
 exclude = []

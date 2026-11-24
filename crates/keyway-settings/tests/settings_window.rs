@@ -272,6 +272,15 @@ fn test_layouts(app: &Rc<SettingsApp>, config_path: &Path) {
         "layout changes never touch the configuration file",
         !config_path.exists(),
     );
+
+    check(
+        "the on-screen keyboard is light unless chosen otherwise",
+        app.layouts.keyboard_theme.active_id().as_deref() == Some("light"),
+    );
+    app.layouts.keyboard_theme.set_active_id(Some("dark"));
+    wait_until("the keyboard's colours are saved", || {
+        std::fs::read_to_string(config_path).is_ok_and(|text| text.contains("theme = \"dark\""))
+    });
 }
 
 fn test_shortcuts(app: &Rc<SettingsApp>, config_path: &Path) {
