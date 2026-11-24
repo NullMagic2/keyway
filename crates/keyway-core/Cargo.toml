@@ -1,0 +1,16 @@
+# Module: keyway.core.manifest
+# Purpose: Declare the pure logic library shared by every Keyway binary.
+# Created: 2026-11-08
+# Architecture: Must stay free of device, socket, D-Bus and file access.
+
+[package]
+name = "keyway-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true

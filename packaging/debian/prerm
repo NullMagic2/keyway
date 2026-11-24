@@ -1,0 +1,12 @@
+#!/bin/sh
+# Module: keyway.packaging.debian.prerm
+# Purpose: Stop the router before its files are removed.
+# Created: 2026-11-08
+# Architecture: When the router stops, the kernel gives every keyboard back to the desktop.
+set -e
+
+if [ "$1" = "remove" ] && [ -d /run/systemd/system ]; then
+    deb-systemd-invoke stop keyway-router.service || true
+fi
+
+exit 0

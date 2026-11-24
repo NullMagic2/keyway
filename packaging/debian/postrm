@@ -1,0 +1,24 @@
+#!/bin/sh
+# Module: keyway.packaging.debian.postrm
+# Purpose: Clear what the package registered once its files are gone.
+# Created: 2026-11-08
+# Architecture: Users' own configuration files stay; removing a program never deletes them.
+set -e
+
+case "$1" in
+    remove | purge)
+        if command -v udevadm >/dev/null 2>&1; then
+            udevadm control --reload-rules || true
+        fi
+
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload || true
+        fi
+
+        if [ "$1" = "purge" ]; then
+            deb-systemd-helper purge keyway-router.service >/dev/null || true
+        fi
+        ;;
+esac
+
+exit 0

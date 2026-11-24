@@ -1,0 +1,7 @@
+{
+  "uuid": "keyway@local",
+  "name": "Keyway",
+  "description": "Replaces the keyboard layout switcher with Keyway's, and lets its agent switch layouts and type Alt code characters.",
+  "shell-version": ["46", "47", "48", "49", "50"],
+  "version": 1
+}

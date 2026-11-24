@@ -1,0 +1,7 @@
+{
+  "uuid": "keyway@local",
+  "name": "Keyway",
+  "description": "Replaces the keyboard layout switcher with Keyway's, and lets its agent switch layouts and type Alt code characters.",
+  "cinnamon-version": ["6.2", "6.4", "6.6"],
+  "version": 1
+}

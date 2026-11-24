@@ -1,0 +1,56 @@
+# Module: keyway.packaging.router_service
+# Purpose: Run keyway-router as an unprivileged, sandboxed system service.
+# Created: 2026-11-08
+# Architecture: Reaches keyboards through the input group and 70-keyway.rules. It stays
+# idle until a user's agent connects to /run/keyway/router.sock. The installer fills in the path.
+
+[Unit]
+Description=Keyway keyboard router
+After=systemd-udevd.service systemd-logind.service
+
+[Service]
+# 70-keyway.rules alone cannot grant this: another rule's uaccess tag, such as Steam's, gives the
+# node an access list whose group entry a mode change does not touch, only its mask. So this step
+# runs outside the sandbox. Its failure is ignored because most nodes have no such list.
+ExecStartPre=+-/usr/bin/setfacl -m group::rw /dev/uinput
+ExecStart=@KEYWAY_ROUTER_BIN@
+Restart=on-failure
+RestartSec=1
+
+DynamicUser=yes
+SupplementaryGroups=input
+RuntimeDirectory=keyway
+RuntimeDirectoryMode=0755
+
+DevicePolicy=closed
+DeviceAllow=char-input rw
+DeviceAllow=/dev/uinput rw
+
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+PrivateNetwork=yes
+PrivateTmp=yes
+ProcSubset=pid
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProtectSystem=strict
+RemoveIPC=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,12 @@
+# Module: keyway.packaging.autostart
+# Purpose: Start the agent in Cinnamon sessions, which never reach graphical-session.target.
+# Created: 2026-11-08
+# Architecture: Installed per user by keyway setup outside a package; GNOME sessions start the
+# agent's service through that target instead, and a package has keyway-session.desktop.
+[Desktop Entry]
+Type=Application
+Name=Keyway agent
+Exec=systemctl --user start keyway.service
+OnlyShowIn=X-Cinnamon;
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

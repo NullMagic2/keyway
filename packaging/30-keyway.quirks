@@ -1,0 +1,9 @@
+# Module: keyway.packaging.libinput_quirks
+# Purpose: Keep touchpad disable-while-typing working through the virtual keyboard.
+# Created: 2026-11-08
+# Architecture: libinput pairs touchpads only with internal keyboards, and the router's
+# device would otherwise look external. The name matches ROUTER_DEVICE_NAME.
+[Keyway virtual keyboard]
+MatchUdevType=keyboard
+MatchName=Keyway virtual keyboard
+AttrKeyboardIntegration=internal

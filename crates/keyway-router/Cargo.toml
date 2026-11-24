@@ -1,0 +1,16 @@
+# Module: keyway.router.manifest
+# Purpose: Declare the privileged service that routes keys from physical keyboards.
+# Created: 2026-11-08
+# Architecture: All key decisions live in keyway-core; this crate only performs the I/O.
+
+[package]
+name = "keyway-router"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+keyway-core = { path = "../keyway-core" }
+libc.workspace = true
+nix.workspace = true

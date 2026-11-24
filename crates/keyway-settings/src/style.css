@@ -1,0 +1,75 @@
+/* Module: keyway.settings.style
+   Purpose: Give GTK3 widgets a card layout while following the system theme's colors.
+   Created: 2026-11-08
+   Architecture: Loaded by widgets.rs; colors derive from the theme, for light and dark. */
+
+.keyway-section-title {
+    font-weight: bold;
+    font-size: 11pt;
+}
+
+.keyway-dim {
+    opacity: 0.62;
+}
+
+.keyway-small {
+    font-size: 9pt;
+}
+
+.keyway-chip {
+    background: alpha(currentColor, 0.09);
+    border-radius: 5px;
+    padding: 3px 5px;
+    font-weight: bold;
+    font-size: 9pt;
+}
+
+.keyway-chip.keyway-active {
+    background: @theme_selected_bg_color;
+    color: @theme_selected_fg_color;
+}
+
+.keyway-key {
+    border: 1px solid alpha(currentColor, 0.22);
+    border-bottom-width: 2px;
+    border-radius: 5px;
+    padding: 2px 8px;
+    font-size: 9pt;
+    background: alpha(currentColor, 0.04);
+}
+
+.keyway-card {
+    border: 1px solid alpha(currentColor, 0.15);
+    border-radius: 8px;
+    background: @theme_base_color;
+}
+
+.keyway-card row {
+    padding: 0;
+    border-bottom: 1px solid alpha(currentColor, 0.09);
+}
+
+.keyway-card row:last-child {
+    border-bottom: none;
+}
+
+.keyway-card row:first-child {
+    border-radius: 8px 8px 0 0;
+}
+
+.keyway-card row:last-child {
+    border-radius: 0 0 8px 8px;
+}
+
+.keyway-card row:only-child {
+    border-radius: 8px;
+}
+
+.keyway-capture-keys {
+    min-height: 34px;
+}
+
+.keyway-code {
+    font-family: monospace;
+    font-size: 9pt;
+}

@@ -1,0 +1,14 @@
+# Module: keyway.packaging.session_entry
+# Purpose: Turn Keyway on at each user's login, so a package replaces the switcher by itself.
+# Created: 2026-11-09
+# Architecture: Installed by the packages as /etc/xdg/autostart/keyway.desktop. keyway remove
+# hides it for one user with an entry of the same name under ~/.config/autostart. It outlives
+# apt remove as a configuration file, so TryExec makes it do nothing until apt purge.
+[Desktop Entry]
+Type=Application
+Name=Keyway
+Comment=Keyboard language switcher
+TryExec=@KEYWAY_BIN@
+Exec=@KEYWAY_BIN@ session-start
+OnlyShowIn=GNOME;X-Cinnamon;
+NoDisplay=true

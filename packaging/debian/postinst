@@ -1,0 +1,39 @@
+#!/bin/sh
+# Module: keyway.packaging.debian.postinst
+# Purpose: Apply the udev rule and start the router after installation.
+# Created: 2026-11-08
+# Architecture: The router stays idle with keyboards closed until a user's agent connects, which
+# the package's session entry brings about at that user's next login, where a desktop can load
+# the extension. A session already running keeps what it has until then, or until a user whose
+# session already runs Keyway asks for the upgrade with keyway restart.
+set -e
+
+if [ "$1" = "configure" ]; then
+    if command -v udevadm >/dev/null 2>&1; then
+        udevadm control --reload-rules || true
+        udevadm trigger --name-match=uinput || true
+
+        # The trigger only queues the change. A router started before udev gives the node to
+        # the input group cannot open it.
+        udevadm settle --timeout=10 || true
+    fi
+
+    deb-systemd-helper unmask keyway-router.service >/dev/null || true
+    deb-systemd-helper enable keyway-router.service >/dev/null || true
+
+    # Package builds and containers have no running systemd to talk to.
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload || true
+        deb-systemd-invoke restart keyway-router.service || true
+    fi
+
+    echo "Keyway is installed and replaces the keyboard layout switcher at each user's next login."
+    echo "A user who wants to keep the desktop's own switcher can run: keyway remove"
+    echo "A session that already runs Keyway takes up this version with: keyway restart"
+
+    if ! command -v gnome-shell >/dev/null 2>&1 && ! command -v cinnamon >/dev/null 2>&1; then
+        echo "Note: Keyway can only switch layouts under GNOME Shell or Cinnamon; neither is installed."
+    fi
+fi
+
+exit 0

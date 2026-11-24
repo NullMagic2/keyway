@@ -1,0 +1,23 @@
+# Module: keyway.settings.manifest
+# Purpose: Declare the GTK3 settings window.
+# Created: 2026-11-08
+# Architecture: Edits the desktop's source list and the configuration file the agent watches.
+
+[package]
+name = "keyway-settings"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+gtk.workspace = true
+keyway-core = { path = "../keyway-core" }
+keyway-desktop = { path = "../keyway-desktop" }
+
+[dev-dependencies]
+zbus.workspace = true
+
+[[test]]
+name = "settings_window"
+harness = false

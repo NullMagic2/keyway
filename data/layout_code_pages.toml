@@ -1,0 +1,97 @@
+# Module: keyway.data.layout_code_pages
+# Purpose: Map XKB layouts to the OEM and ANSI code pages of their Windows locale.
+# Created: 2026-11-08
+# Architecture: Embedded by keyway-core code_pages; users override it in their config.
+# Lookup tries layout+variant, then layout, then default. Layouts whose Windows locale is
+# Unicode-only or double-byte use the default.
+
+default = { oem = 437, ansi = 1252 }
+
+[layouts]
+# Western European and other Latin script locales.
+at = { oem = 850, ansi = 1252 }
+au = { oem = 850, ansi = 1252 }
+be = { oem = 850, ansi = 1252 }
+br = { oem = 850, ansi = 1252 }
+bw = { oem = 850, ansi = 1252 }
+ca = { oem = 850, ansi = 1252 }
+cd = { oem = 850, ansi = 1252 }
+ch = { oem = 850, ansi = 1252 }
+cm = { oem = 850, ansi = 1252 }
+de = { oem = 850, ansi = 1252 }
+dk = { oem = 850, ansi = 1252 }
+dz = { oem = 850, ansi = 1252 }
+es = { oem = 850, ansi = 1252 }
+fi = { oem = 850, ansi = 1252 }
+fo = { oem = 850, ansi = 1252 }
+fr = { oem = 850, ansi = 1252 }
+gb = { oem = 850, ansi = 1252 }
+gh = { oem = 850, ansi = 1252 }
+gn = { oem = 850, ansi = 1252 }
+id = { oem = 850, ansi = 1252 }
+ie = { oem = 850, ansi = 1252 }
+is = { oem = 850, ansi = 1252 }
+it = { oem = 850, ansi = 1252 }
+latam = { oem = 850, ansi = 1252 }
+ml = { oem = 850, ansi = 1252 }
+my = { oem = 850, ansi = 1252 }
+ng = { oem = 850, ansi = 1252 }
+nl = { oem = 850, ansi = 1252 }
+no = { oem = 850, ansi = 1252 }
+nz = { oem = 850, ansi = 1252 }
+pt = { oem = 850, ansi = 1252 }
+se = { oem = 850, ansi = 1252 }
+sn = { oem = 850, ansi = 1252 }
+tg = { oem = 850, ansi = 1252 }
+za = { oem = 850, ansi = 1252 }
+
+# Central European locales.
+al = { oem = 852, ansi = 1250 }
+ba = { oem = 852, ansi = 1250 }
+cz = { oem = 852, ansi = 1250 }
+hr = { oem = 852, ansi = 1250 }
+hu = { oem = 852, ansi = 1250 }
+md = { oem = 852, ansi = 1250 }
+me = { oem = 852, ansi = 1250 }
+pl = { oem = 852, ansi = 1250 }
+ro = { oem = 852, ansi = 1250 }
+"rs+latin" = { oem = 852, ansi = 1250 }
+si = { oem = 852, ansi = 1250 }
+sk = { oem = 852, ansi = 1250 }
+tm = { oem = 852, ansi = 1250 }
+
+# Cyrillic locales.
+bg = { oem = 866, ansi = 1251 }
+by = { oem = 866, ansi = 1251 }
+kg = { oem = 866, ansi = 1251 }
+kz = { oem = 866, ansi = 1251 }
+mk = { oem = 866, ansi = 1251 }
+mn = { oem = 866, ansi = 1251 }
+rs = { oem = 855, ansi = 1251 }
+ru = { oem = 866, ansi = 1251 }
+tj = { oem = 866, ansi = 1251 }
+ua = { oem = 866, ansi = 1251 }
+uz = { oem = 866, ansi = 1251 }
+
+# Baltic locales.
+ee = { oem = 775, ansi = 1257 }
+lt = { oem = 775, ansi = 1257 }
+lv = { oem = 775, ansi = 1257 }
+
+# Arabic script locales.
+af = { oem = 720, ansi = 1256 }
+ara = { oem = 720, ansi = 1256 }
+eg = { oem = 720, ansi = 1256 }
+iq = { oem = 720, ansi = 1256 }
+ir = { oem = 720, ansi = 1256 }
+ma = { oem = 720, ansi = 1256 }
+pk = { oem = 720, ansi = 1256 }
+sy = { oem = 720, ansi = 1256 }
+
+# Locales with a code page of their own.
+az = { oem = 857, ansi = 1254 }
+gr = { oem = 737, ansi = 1253 }
+il = { oem = 862, ansi = 1255 }
+th = { oem = 874, ansi = 874 }
+tr = { oem = 857, ansi = 1254 }
+vn = { oem = 1258, ansi = 1258 }

@@ -1,0 +1,16 @@
+# Module: keyway.packaging.settings_entry
+# Purpose: List the settings window among the desktop's applications.
+# Created: 2026-11-08
+# Architecture: Installed by keyway setup, which fills in the binary's path. The extension's
+# taskbar menu entry opens the window through this file.
+[Desktop Entry]
+Type=Application
+Name=Keyway
+Comment=Keyboard layouts, shortcuts and Alt codes
+Comment[pt_BR]=Layouts de teclado, atalhos e códigos Alt
+Comment[pt_PT]=Esquemas de teclado, atalhos e códigos Alt
+Comment[el]=Διατάξεις πληκτρολογίου, συντομεύσεις και κωδικοί Alt
+Exec=@KEYWAY_SETTINGS_BIN@
+Icon=input-keyboard
+Categories=GTK;Settings;HardwareSettings;
+Keywords=keyboard;layout;language;input;teclado;idioma;πληκτρολόγιο;

@@ -1,0 +1,40 @@
+# Module: keyway.config_example
+# Purpose: Show every user option with its default. Created: 2026-11-08.
+# Architecture: Parsed by keyway-core config; lives at ~/.config/keyway/config.toml.
+
+[switching]
+# Any chord works: "Ctrl+Shift", "Super+Space", "CapsLock".
+next = "Alt+Shift"
+# Optional; unset by default because next already cycles through the layouts.
+# previous = "Ctrl+Alt+Shift"
+# "list" follows the desktop's order, "recent" toggles most recently used first; layouts not
+# used since the login come last.
+order = "list"
+
+# Windows-style direct shortcuts, keyed by the desktop's input source id. A layout that has
+# one is reached by it alone: next and previous pass over it.
+[switching.direct]
+# "br" = "Ctrl+Shift+1"
+# "gr+simple" = "Ctrl+Shift+2"
+
+[alt_codes]
+enabled = true
+# "ignored" accepts keypad keys in either NumLock state, "required" only when on.
+numlock = "ignored"
+# Alt plus keypad plus, then hex digits. Off by default, as on Windows.
+hex_numpad = false
+# Treat decimal values above 255 as Unicode instead of wrapping modulo 256.
+unicode_above_255 = false
+
+# Override the code pages inferred from the active layout.
+[alt_codes.code_pages]
+# "br" = { oem = 850, ansi = 1252 }
+# "gr+simple" = { oem = 737, ansi = 1253 }
+
+[indicator]
+# Show the layout's country flag beside its code, such as PT-BR, in the taskbar and its menu.
+flags = true
+
+[devices]
+# Device names the router must never grab.
+exclude = []

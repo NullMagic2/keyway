@@ -1,0 +1,5 @@
+# Module: keyway.packaging.udev_rules
+# Purpose: Let the input group, which the router runs in, create virtual keyboards.
+# Created: 2026-11-08
+# Architecture: Input nodes already belong to this group; /dev/uinput does not by default.
+KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="input", MODE="0660"

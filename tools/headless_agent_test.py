@@ -1,0 +1,1006 @@
+"""
+Module: keyway.tools.headless_agent_test
+Purpose: Drive the real agent and extension on a headless desktop, with a fake router.
+Created: 2026-11-08
+Architecture: Started by run_headless_tests.sh or run_cinnamon_tests.sh, which provide the
+isolated environment. The same scenarios run on each desktop through a small Desktop class.
+The fake router stands in for key input, which a headless desktop has no devices for.
+"""
+
+import json
+import os
+import signal
+import socket
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+WAYLAND_DISPLAY = "keyway-test"
+SOCKET_NAME = "router.sock"
+EXTENSION_UUID = "keyway@local"
+TWO_LAYOUTS = ["br", "gr+simple"]
+THREE_LAYOUTS = ["br", "gr+simple", "us"]
+FIVE_LAYOUTS = ["br", "gr+simple", "us", "de", "fr"]
+INPUT_SOURCE_MANAGER = "/usr/share/cinnamon/js/ui/keyboardManager.js"
+KEYBOARD_APPLET = "imports.ui.appletManager.getRunningInstancesForUuid('keyboard@cinnamon.org')[0]"
+CINNAMON_INDICATOR = ("Main.panel._rightBox.get_children()"
+                      ".find(actor => actor.name === 'keyway-indicator')?._delegate")
+PACKAGED_MARKER = "keyway/packaged"
+RELOAD_MARKER = "keywayReloaded"
+RESTART_CALLS = ["--user daemon-reload", "--user restart keyway.service",
+                 "restart keyway-router.service"]
+SCREENSHOT_SECONDS = 1.0
+SHELL_INPUT_SOURCES = "Main.panel.statusArea.keyboard._inputSourceManager"
+
+# Real key events for the Shell to act on, from a keyboard kept alive between calls.
+SHELL_KEYS = """(() => {
+    const {Clutter, GLib} = imports.gi;
+    globalThis.keywayTestKeyboard ??= Clutter.get_default_backend().get_default_seat()
+        .create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
+    for (const [key, state] of [%s])
+        keywayTestKeyboard.notify_keyval(GLib.get_monotonic_time(), Clutter[key],
+            state ? Clutter.KeyState.PRESSED : Clutter.KeyState.RELEASED);
+})()"""
+HOLD_SUPER_TAP_SPACE = "['KEY_Super_L', 1], ['KEY_space', 1], ['KEY_space', 0]"
+HOLD_SHIFT_SUPER_TAP_SPACE = "['KEY_Shift_L', 1], " + HOLD_SUPER_TAP_SPACE
+RELEASE_SUPER = "['KEY_Super_L', 0]"
+RELEASE_SHIFT_SUPER = "['KEY_Super_L', 0], ['KEY_Shift_L', 0]"
+X_DISPLAY = ":95"
+X_SCREEN = "1280x800x24"
+WAIT_LIMIT_SECONDS = 15.0
+RETRY_SECONDS = 0.05
+QUIET_SECONDS = 1.0
+PROTOCOL_VERSION = 1
+
+NEXT_LAYOUT = {"shortcut": "next_layout"}
+PREVIOUS_LAYOUT = {"shortcut": "previous_layout"}
+
+
+def select_layout(layout):
+    return {"shortcut": {"select_layout": layout}}
+
+
+def decimal_code(digits):
+    return {"alt_code": {"radix": "decimal", "digits": digits}}
+
+
+def check(description, passed, detail=""):
+    print(f"{'ok  ' if passed else 'FAIL'} {description}{f': {detail}' if detail else ''}", flush=True)
+
+    if not passed:
+        raise SystemExit(1)
+
+
+def wait_until(description, condition):
+    deadline = time.monotonic() + WAIT_LIMIT_SECONDS
+
+    while time.monotonic() < deadline:
+        if condition():
+            check(description, True)
+            return
+
+        time.sleep(RETRY_SECONDS)
+
+    check(description, False, "timed out")
+
+
+def run_quietly(*arguments):
+    return subprocess.run(arguments, capture_output=True, text=True, check=False)
+
+
+def extension_call(method, *arguments):
+    return run_quietly("gdbus", "call", "--session", "--dest", "org.keyway.Shell",
+                       "--object-path", "/org/keyway/Shell",
+                       "--method", f"org.keyway.Shell.{method}", *arguments)
+
+
+def active_source():
+    result = extension_call("ActiveSource")
+
+    return result.stdout.strip().strip("(),'") if result.returncode == 0 else None
+
+
+def gsettings_set(schema, key, value):
+    subprocess.run(["gsettings", "set", schema, key, value], check=True)
+
+
+class GnomeDesktop:
+    """GNOME Shell, headless on Wayland."""
+
+    eval_name = "org.gnome.Shell"
+    eval_path = "/org/gnome/Shell"
+    indicator = "Main.panel.statusArea.keyway"
+    desktop_switcher = "Main.panel.statusArea.keyboard.container"
+    reloadable_file = "gnome-shell/extensions/keyway@local/adapter.js"
+
+    def set_layouts(self, layouts):
+        sources = ", ".join(f"('xkb', '{layout}')" for layout in layouts)
+        gsettings_set("org.gnome.desktop.input-sources", "sources", f"[{sources}]")
+
+    def start(self, log):
+        os.environ["WAYLAND_DISPLAY"] = WAYLAND_DISPLAY
+
+        return [subprocess.Popen(
+            ["gnome-shell", "--headless", "--wayland", "--no-x11", "--unsafe-mode",
+             "--virtual-monitor", "1280x720", f"--wayland-display={WAYLAND_DISPLAY}"],
+            stdout=log, stderr=subprocess.STDOUT)]
+
+    def wait_for_daemon(self):
+        pass
+
+    def enable_extension(self):
+        desktop_eval(f"Main.extensionManager.enableExtension('{EXTENSION_UUID}')")
+
+    def disable_extension(self):
+        desktop_eval(f"Main.extensionManager.disableExtension('{EXTENSION_UUID}')")
+
+    def enabled_extensions(self):
+        return run_quietly("gsettings", "get", "org.gnome.shell", "enabled-extensions").stdout
+
+    def text_input_matches(self, expect_text_input):
+        has_input = '"true"' in desktop_eval("String(!!Main.inputMethod.currentFocus)")
+
+        return has_input == expect_text_input
+
+    def save_screenshot(self, path):
+        run_quietly("gdbus", "call", "--session", "--dest", "org.gnome.Shell.Screenshot",
+                    "--object-path", "/org/gnome/Shell/Screenshot",
+                    "--method", "org.gnome.Shell.Screenshot.Screenshot",
+                    "false", "false", str(path))
+
+
+class CinnamonDesktop:
+    """Cinnamon 6.4 and older on a private X server, whose daemon applies the layouts."""
+
+    eval_name = "org.Cinnamon"
+    eval_path = "/org/Cinnamon"
+    indicator = CINNAMON_INDICATOR
+    desktop_switcher = f"{KEYBOARD_APPLET}.actor"
+    reloadable_file = "cinnamon/extensions/keyway@local/extension.js"
+    has_layout_limit = True
+
+    def set_layouts(self, layouts):
+        entries = ", ".join("'" + layout.replace("+", "\\t") + "'" for layout in layouts)
+        gsettings_set("org.gnome.libgnomekbd.keyboard", "layouts", f"[{entries}]")
+
+    def applet_shows_second_layout(self):
+        return '"1"' in desktop_eval(
+            f"String({KEYBOARD_APPLET}._controller.get_current_layout_idx())")
+
+    def wait_for_daemon(self):
+        wait_until("the daemon applies the layouts",
+                   lambda: "br,gr" in run_quietly("setxkbmap", "-query").stdout)
+
+    def start(self, log):
+        os.environ["DISPLAY"] = X_DISPLAY
+        server = subprocess.Popen(["Xvfb", X_DISPLAY, "-screen", "0", X_SCREEN],
+                                  stdout=log, stderr=subprocess.STDOUT)
+
+        wait_until("X server is up", lambda: run_quietly("xdpyinfo").returncode == 0)
+
+        daemon = subprocess.Popen(["csd-keyboard"], stdout=log, stderr=subprocess.STDOUT)
+
+        self.wait_for_daemon()
+
+        return [subprocess.Popen(["cinnamon", "--x11"], stdout=log, stderr=subprocess.STDOUT),
+                daemon, server]
+
+    def enable_extension(self):
+        gsettings_set("org.cinnamon", "enabled-extensions", f"['{EXTENSION_UUID}']")
+
+    def disable_extension(self):
+        gsettings_set("org.cinnamon", "enabled-extensions", "@as []")
+
+    def enabled_extensions(self):
+        return run_quietly("gsettings", "get", "org.cinnamon", "enabled-extensions").stdout
+
+    def text_input_matches(self, _expect_text_input):
+        """Cinnamon has no text input protocol here, so every client gets key events."""
+        return True
+
+    def save_screenshot(self, path):
+        result = run_quietly("gdbus", "call", "--session", "--dest", self.eval_name,
+                             "--object-path", self.eval_path, "--method",
+                             f"{self.eval_name}.Screenshot", "false", "false", str(path))
+
+        if result.returncode != 0:
+            print(f"screenshot failed: {result.stderr.strip()}", flush=True)
+
+
+class InputSourceCinnamonDesktop(CinnamonDesktop):
+    """Cinnamon 6.6 and later, which applies its input sources itself, with no layout limit."""
+
+    has_layout_limit = False
+
+    def set_layouts(self, layouts):
+        sources = ", ".join(f"('xkb', '{layout}')" for layout in layouts)
+        gsettings_set("org.cinnamon.desktop.input-sources", "sources", f"[{sources}]")
+
+    def applet_shows_second_layout(self):
+        return '"true"' in desktop_eval(
+            f"String({KEYBOARD_APPLET}._selectedLayout"
+            f" === [...{KEYBOARD_APPLET}._layoutItems.values()][1])")
+
+    def wait_for_daemon(self):
+        pass
+
+
+def cinnamon_desktop():
+    if Path(INPUT_SOURCE_MANAGER).exists():
+        return InputSourceCinnamonDesktop()
+
+    return CinnamonDesktop()
+
+
+DESKTOPS = {"gnome": GnomeDesktop, "cinnamon": cinnamon_desktop}
+desktop = None
+
+
+def desktop_eval(code):
+    result = run_quietly("gdbus", "call", "--session", "--dest", desktop.eval_name,
+                         "--object-path", desktop.eval_path,
+                         "--method", f"{desktop.eval_name}.Eval", code)
+
+    return result.stdout.strip()
+
+
+class FakeRouter:
+    """Listens where the real router would, and speaks its protocol."""
+
+    def __init__(self, path):
+        self.path = path
+        self.listener = socket.socket(socket.AF_UNIX)
+        self.listener.bind(str(path))
+        self.listener.listen()
+        self.connection = None
+        self.buffer = b""
+
+    def accept(self, timeout=WAIT_LIMIT_SECONDS):
+        self.listener.settimeout(timeout)
+
+        try:
+            self.connection, _address = self.listener.accept()
+        except TimeoutError:
+            return False
+
+        self.buffer = b""
+        return True
+
+    def receive(self, timeout=WAIT_LIMIT_SECONDS):
+        """Returns the next message, or None on timeout, or EOFError if the agent closed."""
+        self.connection.settimeout(timeout)
+
+        while b"\n" not in self.buffer:
+            try:
+                chunk = self.connection.recv(4096)
+            except TimeoutError:
+                return None
+
+            if not chunk:
+                raise EOFError
+
+            self.buffer += chunk
+
+        line, self.buffer = self.buffer.split(b"\n", 1)
+
+        return json.loads(line)
+
+    def send(self, message):
+        self.connection.sendall(json.dumps(message).encode() + b"\n")
+
+    def wait_for_drop(self):
+        """True once the agent has closed its connection."""
+        try:
+            while self.receive() is not None:
+                pass
+        except EOFError:
+            return True
+
+        return False
+
+    def close_connection(self):
+        self.connection.close()
+        self.connection = None
+
+    def handshake(self):
+        """Completes the greeting and returns the configuration the agent sends."""
+        check("agent greets the router", self.receive() == {"hello": {"version": PROTOCOL_VERSION}})
+        self.send({"hello": {"version": PROTOCOL_VERSION}})
+
+        message = self.receive()
+        check("agent sends a configuration", message is not None and "configure" in message, message)
+
+        return message["configure"]
+
+    def expect_quiet(self, description):
+        message = self.receive(timeout=QUIET_SECONDS)
+        check(description, message is None, message)
+
+    def expect_message(self, description, expected):
+        """Waits for one message, reporting any others that arrive first."""
+        deadline = time.monotonic() + WAIT_LIMIT_SECONDS
+
+        while time.monotonic() < deadline:
+            message = self.receive(timeout=deadline - time.monotonic())
+
+            if message == expected:
+                check(description, True)
+                return
+
+            print(f"     router received {message}", flush=True)
+
+        check(description, False, f"never received {expected}")
+
+    def next_configuration(self):
+        """Waits for a configuration, reporting any other messages that arrive first."""
+        deadline = time.monotonic() + WAIT_LIMIT_SECONDS
+
+        while time.monotonic() < deadline:
+            message = self.receive(timeout=deadline - time.monotonic())
+
+            if message is not None and "configure" in message:
+                return message["configure"]
+
+            print(f"     router received {message}", flush=True)
+
+        check("a configuration arrives", False)
+
+    def drain(self):
+        """Discards messages already on their way, reporting them for the test log."""
+        while (message := self.receive(timeout=QUIET_SECONDS)) is not None:
+            print(f"     router received {message}", flush=True)
+
+
+class TestWindow:
+    """A focused GTK client; its output lines are collected as it reports them."""
+
+    def __init__(self, script, mode):
+        self.lines = []
+        self.process = subprocess.Popen(
+            [sys.executable, "-I", script, mode],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        threading.Thread(target=self._collect, daemon=True).start()
+        self.title = f"keyway-test-{mode}"
+
+    def _collect(self):
+        for line in self.process.stdout:
+            self.lines.append(line.rstrip("\n"))
+
+    def wait_for_focus(self, expect_text_input):
+        def is_ready():
+            desktop_eval("Main.overview.hide()")
+            focused = self.title in desktop_eval("global.display.focus_window?.title")
+
+            return focused and desktop.text_input_matches(expect_text_input)
+
+        wait_until(f"{self.title} has focus", is_ready)
+
+    def close(self):
+        self.process.terminate()
+        self.process.wait()
+
+
+def read_config_section(configuration):
+    return {binding["chord"]: binding["action"] for binding in configuration["shortcuts"]}
+
+
+def test_waits_for_extension_then_configures(router):
+    check("agent waits for the extension", not router.accept(timeout=QUIET_SECONDS))
+
+    desktop.enable_extension()
+    check("agent connects once the extension appears", router.accept())
+
+    configuration = router.handshake()
+    check("default shortcut is Alt+Shift",
+          read_config_section(configuration) == {"Alt+Shift": "next_layout"},
+          configuration["shortcuts"])
+    check("Brazilian Right Alt stays AltGr",
+          configuration["alt_codes"]["allow_right_alt"] is False)
+
+
+def settings_menu_labels():
+    return desktop_eval(f"{desktop.indicator}?.menu._getMenuItems()"
+                        ".map(item => item.label?.text).filter(Boolean).join('|')")
+
+
+# What the indicator shows for each test layout, from data/layout_labels.json.
+INDICATOR_LABELS = {"br": "PT-BR", "gr+simple": "EL-GR"}
+
+
+def indicator_shows(layout):
+    label = f"{desktop.indicator}?._label.text"
+
+    return '"true"' in desktop_eval(f"String({label} === '{INDICATOR_LABELS[layout]}')")
+
+
+def indicator_flag_shown():
+    """True when the indicator and every layout in its menu show a flag."""
+    menu_flags = f"[...{desktop.indicator}._items.values()].every(entry => entry.flag)"
+
+    return '"true"' in desktop_eval(f"String(!!{desktop.indicator}?._flag.visible && {menu_flags})")
+
+
+def menu_rows_show_only_names():
+    """True when each layout's row holds one text; a label and the text actor in it count once."""
+    texts = ("const texts = actor => [typeof actor.text === 'string' ? actor.text : '',"
+             " ...actor.get_children().flatMap(texts)];")
+    rows = f"{desktop.indicator}._layoutSection._getMenuItems()"
+    one_text = "item => new Set(texts(item.actor ?? item).filter(Boolean)).size === 1"
+
+    code = f"(() => {{ {texts} return String({rows}.every({one_text})); }})()"
+
+    return '"true"' in desktop_eval(code)
+
+
+def layout_item_count():
+    return desktop_eval(f"String({desktop.indicator}?._layoutSection._getMenuItems().length)")
+
+
+def desktop_switcher_is_visible():
+    return '"true"' in desktop_eval(f"String({desktop.desktop_switcher}.visible)")
+
+
+def keyway_indicator_exists():
+    return '"true"' in desktop_eval(f"String(!!{desktop.indicator})")
+
+
+def screenshot_indicator_menu():
+    """Only when a run asks for screenshots, as they take time and no check depends on them."""
+    directory = os.environ.get("KEYWAY_SCREENSHOT_DIR")
+
+    if not directory:
+        return
+
+    Path(directory).mkdir(parents=True, exist_ok=True)
+    desktop_eval(f"{desktop.indicator}.menu.open()")
+    time.sleep(SCREENSHOT_SECONDS)
+    desktop.save_screenshot(Path(directory) / "indicator-menu.png")
+    desktop_eval(f"{desktop.indicator}.menu.close()")
+
+
+def test_replaces_the_desktop_switcher():
+    wait_until("Keyway's indicator shows the active layout", lambda: indicator_shows("br"))
+    check("the indicator and its menu show flags", indicator_flag_shown())
+    wait_until("the desktop's own switcher is hidden", lambda: not desktop_switcher_is_visible())
+    check("the menu lists each layout", '"2"' in layout_item_count(), layout_item_count())
+    check("by its full name alone, without its code", menu_rows_show_only_names())
+
+    screenshot_indicator_menu()
+
+    desktop_eval(f"{desktop.indicator}._layoutSection._getMenuItems()[1].activate(null)")
+    wait_until("choosing a layout in the menu switches to it",
+               lambda: active_source() == "gr+simple")
+    wait_until("the indicator follows the switch", lambda: indicator_shows("gr+simple"))
+
+    desktop.set_layouts(THREE_LAYOUTS)
+    wait_until("the menu follows the layout list", lambda: '"3"' in layout_item_count())
+    check("the desktop's switcher stays hidden when layouts change",
+          not desktop_switcher_is_visible())
+
+    desktop.set_layouts(TWO_LAYOUTS)
+    desktop.wait_for_daemon()
+    wait_until("the menu returns to two layouts", lambda: '"2"' in layout_item_count())
+    desktop_eval(f"{desktop.indicator}._layoutSection._getMenuItems()[0].activate(null)")
+    wait_until("the first layout is active again", lambda: active_source() == "br")
+    check("the desktop's switcher is still hidden", not desktop_switcher_is_visible())
+
+
+def test_taskbar_menu_opens_the_settings_window():
+    wait_until("the taskbar menu offers the settings window",
+               lambda: "Keyway settings" in settings_menu_labels())
+
+    desktop_eval(f"{desktop.indicator}.menu._getMenuItems()"
+                 ".find(item => item.label?.text === 'Keyway settings').activate(null)")
+
+    def settings_window_is_open():
+        desktop_eval("Main.overview.hide()")
+        return '"Keyway"' in desktop_eval("global.display.focus_window?.title")
+
+    wait_until("choosing it opens the real settings window", settings_window_is_open)
+
+    desktop_eval("global.display.focus_window.delete(global.get_current_time())")
+    wait_until("the settings window closes",
+               lambda: '"Keyway"' not in desktop_eval("global.display.focus_window?.title"))
+
+
+def test_shortcuts_switch_layouts(router):
+    check("starts on br", active_source() == "br", active_source())
+
+    router.send(NEXT_LAYOUT)
+    wait_until("next switches to gr+simple", lambda: active_source() == "gr+simple")
+
+    if isinstance(desktop, CinnamonDesktop):
+        wait_until("Cinnamon's taskbar applet follows the switch",
+                   desktop.applet_shows_second_layout)
+
+    router.send(NEXT_LAYOUT)
+    wait_until("next wraps to br", lambda: active_source() == "br")
+
+    router.send(PREVIOUS_LAYOUT)
+    wait_until("previous wraps to gr+simple", lambda: active_source() == "gr+simple")
+
+    router.send(select_layout("br"))
+    wait_until("direct shortcut selects br", lambda: active_source() == "br")
+
+    router.drain()
+    router.send(select_layout("no-such-layout"))
+    router.expect_quiet("a removed layout is ignored")
+    check("layout unchanged", active_source() == "br")
+
+
+def test_alt_codes_reach_a_text_window(router, window_script):
+    window = TestWindow(window_script, "entry")
+    window.wait_for_focus(expect_text_input=True)
+
+    def typed(text):
+        return lambda: bool(window.lines) and window.lines[-1] == f"TEXT {text}"
+
+    router.send(decimal_code("130"))
+    wait_until("Alt+130 on br types é", typed("é"))
+
+    router.send(decimal_code("0128"))
+    wait_until("Alt+0128 on br types €", typed("é€"))
+
+    router.send(decimal_code("321"))
+    wait_until("Alt+321 wraps to A", typed("é€A"))
+
+    router.send(decimal_code("0129"))
+    time.sleep(QUIET_SECONDS)
+    check("Alt+0129 types nothing", typed("é€A")())
+
+    router.send(NEXT_LAYOUT)
+    wait_until("switched to Greek", lambda: active_source() == "gr+simple")
+
+    router.send(decimal_code("152"))
+    wait_until("Alt+152 on Greek types α", typed("é€Aα"))
+
+    router.send(decimal_code("0225"))
+    wait_until("Alt+0225 on Greek types α", typed("é€Aαα"))
+
+    router.send(select_layout("br"))
+    wait_until("back on br", lambda: active_source() == "br")
+
+    window.close()
+
+
+def test_alt_codes_without_text_input(router, window_script):
+    window = TestWindow(window_script, "keys")
+    window.wait_for_focus(expect_text_input=False)
+
+    router.send(decimal_code("97"))
+    wait_until("a key on the layout reaches a window without text input",
+               lambda: "KEY a" in window.lines)
+
+    window.close()
+
+
+def test_more_layouts_than_an_x_keymap_holds(router, window_script):
+    """Cinnamon 6.6 chains keymaps past four layouts, so switching and typing must still work."""
+    desktop.set_layouts(FIVE_LAYOUTS)
+    wait_until("five layouts are listed", lambda: "'fr'" in extension_call("ListSources").stdout)
+
+    window = TestWindow(window_script, "entry")
+    window.wait_for_focus(expect_text_input=True)
+
+    router.send(select_layout("fr"))
+    wait_until("the fifth layout is selected", lambda: active_source() == "fr")
+    wait_until("the X server gets the fifth layout",
+               lambda: "fr" in run_quietly("setxkbmap", "-query").stdout)
+    router.expect_message("fr frees Right Alt", {"set_allow_right_alt": True})
+
+    router.send(decimal_code("0128"))
+    wait_until("Alt+0128 on the fifth layout types €",
+               lambda: bool(window.lines) and window.lines[-1] == "TEXT €")
+
+    window.close()
+
+    router.send(select_layout("br"))
+    wait_until("back to the first layout", lambda: active_source() == "br")
+    router.expect_message("br takes Right Alt back", {"set_allow_right_alt": False})
+
+    desktop.set_layouts(TWO_LAYOUTS)
+    wait_until("back to two layouts", lambda: "'fr'" not in extension_call("ListSources").stdout)
+
+
+def shell_keys(keys):
+    desktop_eval(SHELL_KEYS % keys)
+
+
+def shell_popup_exists():
+    return '"true"' in desktop_eval(f"String(!!{SHELL_INPUT_SOURCES}._switcherPopup)")
+
+
+def test_super_space_has_no_popup():
+    """Runs only on GNOME: Cinnamon 6.6 switches with no popup, and 6.4 has no such shortcut."""
+    check("starts on br for Super+Space", active_source() == "br", active_source())
+
+    shell_keys(HOLD_SUPER_TAP_SPACE)
+    wait_until("Super+Space switches while still held", lambda: active_source() == "gr+simple")
+    check("with no popup from the Shell", not shell_popup_exists())
+    shell_keys(RELEASE_SUPER)
+    wait_until("the indicator follows Super+Space", lambda: indicator_shows("gr+simple"))
+
+    shell_keys(HOLD_SUPER_TAP_SPACE)
+    wait_until("Super+Space wraps around", lambda: active_source() == "br")
+    shell_keys(RELEASE_SUPER)
+
+    shell_keys(HOLD_SHIFT_SUPER_TAP_SPACE)
+    wait_until("Shift+Super+Space goes backward", lambda: active_source() == "gr+simple")
+    check("also with no popup", not shell_popup_exists())
+    shell_keys(RELEASE_SHIFT_SUPER)
+
+    shell_keys(HOLD_SHIFT_SUPER_TAP_SPACE)
+    wait_until("and back to br", lambda: active_source() == "br")
+    shell_keys(RELEASE_SHIFT_SUPER)
+
+
+def test_super_space_returns_to_the_shell():
+    """With the extension off. Seeing the popup here also shows the check above can see one."""
+    shell_keys(HOLD_SUPER_TAP_SPACE)
+    wait_until("the Shell's popup returns without the extension", shell_popup_exists)
+    shell_keys(RELEASE_SUPER)
+    wait_until("and closes when Super is released", lambda: not shell_popup_exists())
+    check("the Shell switched the layout", '"gr+simple"' in desktop_eval(
+        f"{SHELL_INPUT_SOURCES}.currentSource.id"))
+
+    desktop_eval(f"{SHELL_INPUT_SOURCES}.inputSources[0].activate(true)")
+    wait_until("back on the first layout", lambda: '"br"' in desktop_eval(
+        f"{SHELL_INPUT_SOURCES}.currentSource.id"))
+
+
+def test_right_alt_follows_the_layout(router):
+    desktop.set_layouts(THREE_LAYOUTS)
+    wait_until("the added layout is listed", lambda: "'us'" in extension_call("ListSources").stdout)
+
+    router.send(select_layout("us"))
+    wait_until("switched to us", lambda: active_source() == "us")
+    router.expect_message("us frees Right Alt", {"set_allow_right_alt": True})
+
+    desktop.set_layouts(TWO_LAYOUTS)
+    wait_until("removing the active layout falls back to br", lambda: active_source() == "br")
+    router.expect_message("br takes Right Alt back", {"set_allow_right_alt": False})
+
+
+def test_configuration_reloads(router, config_path):
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    config_path.write_text('[switching]\nnext = "Ctrl+Shift"\norder = "recent"\n')
+    configuration = router.next_configuration()
+    check("a new configuration reaches the router",
+          read_config_section(configuration) == {"Ctrl+Shift": "next_layout"}, configuration)
+
+    desktop.set_layouts(THREE_LAYOUTS)
+    wait_until("three layouts", lambda: "'us'" in extension_call("ListSources").stdout)
+    router.send(PREVIOUS_LAYOUT)
+    wait_until("recent order ends with the layout not used yet", lambda: active_source() == "us")
+    router.expect_message("right alt freed", {"set_allow_right_alt": True})
+    router.send(select_layout("br"))
+    wait_until("on br", lambda: active_source() == "br")
+    router.expect_message("right alt taken", {"set_allow_right_alt": False})
+    router.send(NEXT_LAYOUT)
+    wait_until("recent order returns to us, not the next in the list",
+               lambda: active_source() == "us")
+    router.expect_message("right alt freed again", {"set_allow_right_alt": True})
+    router.send(select_layout("br"))
+    wait_until("on br again", lambda: active_source() == "br")
+    router.expect_message("right alt taken again", {"set_allow_right_alt": False})
+    desktop.set_layouts(TWO_LAYOUTS)
+    wait_until("two layouts", lambda: "'us'" not in extension_call("ListSources").stdout)
+
+    config_path.write_text('[indicator]\nflags = false\n')
+    wait_until("turning flags off hides them", lambda: not indicator_flag_shown())
+    check("the code stays without flags", indicator_shows("br"))
+    config_path.write_text('[indicator]\nflags = true\n')
+    wait_until("turning flags on shows them again", indicator_flag_shown)
+
+    router.drain()
+    config_path.write_text("this is not valid\n")
+    router.expect_quiet("an invalid configuration is not sent")
+
+    config_path.unlink()
+    configuration = router.next_configuration()
+    check("removing the file restores the defaults",
+          read_config_section(configuration) == {"Alt+Shift": "next_layout"}, configuration)
+
+
+def test_own_shortcut_leaves_the_switching(router, config_path, keyway):
+    desktop.set_layouts(THREE_LAYOUTS)
+    wait_until("three layouts again", lambda: "'us'" in extension_call("ListSources").stdout)
+
+    config_path.write_text('[switching.direct]\n"gr+simple" = "Ctrl+Shift+2"\n')
+    configuration = router.next_configuration()
+    check("a layout's own shortcut reaches the router",
+          read_config_section(configuration).get("Ctrl+Shift+2") == {"select_layout": "gr+simple"},
+          configuration)
+
+    router.send(NEXT_LAYOUT)
+    wait_until("next passes over the layout with its own shortcut",
+               lambda: active_source() == "us")
+    router.expect_message("us frees Right Alt", {"set_allow_right_alt": True})
+
+    router.send(PREVIOUS_LAYOUT)
+    wait_until("previous passes over it too", lambda: active_source() == "br")
+    router.expect_message("br takes Right Alt", {"set_allow_right_alt": False})
+
+    run_quietly(keyway, "next")
+    wait_until("and so does the command", lambda: active_source() == "us")
+    router.expect_message("us frees it", {"set_allow_right_alt": True})
+
+    router.send(select_layout("gr+simple"))
+    wait_until("its own shortcut still selects it", lambda: active_source() == "gr+simple")
+
+    router.send(PREVIOUS_LAYOUT)
+    wait_until("switching leaves it for its neighbour", lambda: active_source() == "br")
+    router.expect_message("br takes Right Alt back", {"set_allow_right_alt": False})
+
+    config_path.unlink()
+    router.next_configuration()
+    desktop.set_layouts(TWO_LAYOUTS)
+    wait_until("two layouts again", lambda: "'us'" not in extension_call("ListSources").stdout)
+
+
+def test_command_line(keyway):
+    status = run_quietly(keyway, "status")
+    check("status marks the active layout", "* br" in status.stdout, status.stdout)
+
+    run_quietly(keyway, "next")
+    wait_until("command next", lambda: active_source() == "gr+simple")
+
+    run_quietly(keyway, "previous")
+    wait_until("command previous", lambda: active_source() == "br")
+
+    run_quietly(keyway, "select", "gr+simple")
+    wait_until("command select", lambda: active_source() == "gr+simple")
+
+    run_quietly(keyway, "select", "br")
+    wait_until("command select back", lambda: active_source() == "br")
+
+
+def systemctl_stand_in(work_dir):
+    """Returns an environment whose systemctl only logs its arguments, and that log. A test bus
+    cannot reach the real one."""
+    stand_in = work_dir / "stand-in"
+    stand_in.mkdir()
+    systemctl_log = work_dir / "systemctl.log"
+    (stand_in / "systemctl").write_text(f'#!/bin/sh\necho "$*" >> {systemctl_log}\nexit 0\n')
+    (stand_in / "systemctl").chmod(0o755)
+
+    return {**os.environ, "PATH": f"{stand_in}:{os.environ['PATH']}"}, systemctl_log
+
+
+def run_with(environment, *command):
+    return subprocess.run(command, env=environment, capture_output=True, text=True, check=False)
+
+
+def test_restart_loads_a_changed_extension(router, keyway, config_path, stand_in):
+    """Changes the installed extension as an upgrade would, in a desktop that keeps running."""
+    environment, systemctl_log = stand_in
+    extension_file = Path(os.environ["XDG_DATA_HOME"]) / desktop.reloadable_file
+
+    config_path.write_text('[indicator]\nflags = false\n')
+    wait_until("flags are off before the restart", lambda: not indicator_flag_shown())
+    extension_file.write_text(f"{extension_file.read_text()}\nglobalThis.{RELOAD_MARKER} = true;\n")
+
+    result = run_with(environment, keyway, "restart")
+    check("restart succeeds", result.returncode == 0, result.stderr)
+    check("and says so", "Desktop extension restarted" in result.stdout, result.stdout)
+    check("it restarts the agent and the router",
+          systemctl_log.read_text().splitlines() == RESTART_CALLS, systemctl_log.read_text())
+    wait_until("the desktop runs the changed extension",
+               lambda: '"true"' in desktop_eval(f"String(globalThis.{RELOAD_MARKER} === true)"))
+
+    check("a running agent lets go of the router meanwhile", router.wait_for_drop())
+    router.close_connection()
+    check("and returns to it", router.accept())
+    router.handshake()
+    wait_until("the changed extension replaces the desktop's switcher",
+               lambda: indicator_shows("br") and not desktop_switcher_is_visible())
+    check("and learns the flag choice from the agent", not indicator_flag_shown())
+
+    config_path.unlink()
+    wait_until("flags return with the defaults", indicator_flag_shown)
+    router.drain()
+
+
+def test_restart_without_the_loader(router, keyway, stand_in):
+    """Takes the extension out of the Shell, which is then as one whose login began with an
+    extension older than the loader, and follows what keyway restart prints."""
+    environment, systemctl_log = stand_in
+    manager = "Main.extensionManager"
+
+    desktop_eval(f"{manager}.unloadExtension({manager}.lookup('{EXTENSION_UUID}'))")
+    wait_until("the Shell forgets the extension", lambda: not keyway_indicator_exists())
+    check("agent drops the router with it", router.wait_for_drop())
+    router.close_connection()
+
+    result = run_with(environment, keyway, "restart")
+    lines = [line for line in result.stderr.splitlines() if line.startswith("const ")]
+    check("restart fails without the loader", result.returncode == 1, result.stderr)
+    check("it gives a Looking Glass line, and no new login",
+          len(lines) == 1 and "Alt+F2" in result.stderr and "login" not in result.stderr,
+          result.stderr)
+    check("it still restarts the agent and the router",
+          systemctl_log.read_text().splitlines()[-len(RESTART_CALLS):] == RESTART_CALLS,
+          systemctl_log.read_text())
+
+    desktop_eval(f"Main.createLookingGlass()._evaluate({json.dumps(lines[0])}).then(() => 'done')")
+    check("the line brings the extension back, and the agent with it", router.accept())
+    router.handshake()
+    wait_until("it replaces the desktop's switcher again",
+               lambda: indicator_shows("br") and not desktop_switcher_is_visible())
+
+    result = run_with(environment, keyway, "restart")
+    check("restart then works", result.returncode == 0, result.stderr)
+    check("the agent lets go of the router for it", router.wait_for_drop())
+    router.close_connection()
+    check("and returns", router.accept())
+    router.handshake()
+    wait_until("the indicator is back after it", lambda: indicator_shows("br"))
+    router.drain()
+
+
+def test_extension_loss_releases_the_router(router, keyway, stand_in):
+    desktop.disable_extension()
+    wait_until("disabling removes Keyway's indicator", lambda: not keyway_indicator_exists())
+    check("the desktop's own switcher comes back", desktop_switcher_is_visible())
+
+    result = run_with(stand_in[0], keyway, "restart")
+    check("restart says that the extension is off, and offers no way around that",
+          "the extension is not running" in result.stderr and "Alt+F2" not in result.stderr,
+          result.stderr)
+
+    check("agent drops the router without the extension", router.wait_for_drop())
+    router.close_connection()
+    check("agent stays away while it is gone", not router.accept(timeout=QUIET_SECONDS))
+
+    if isinstance(desktop, GnomeDesktop):
+        test_super_space_returns_to_the_shell()
+
+    desktop.enable_extension()
+    check("agent returns with the extension", router.accept())
+    router.handshake()
+    wait_until("the desktop's switcher is replaced again", lambda: indicator_shows("br"))
+    check("and hidden", not desktop_switcher_is_visible())
+
+
+def test_router_loss_reconnects(router):
+    router.close_connection()
+    check("agent reconnects after losing the router", router.accept())
+    router.handshake()
+
+
+def test_stop_signal(router, agent):
+    agent.send_signal(signal.SIGTERM)
+    check("agent exits cleanly", agent.wait(timeout=WAIT_LIMIT_SECONDS) == 0, agent.returncode)
+
+    try:
+        check("the socket closes", router.receive() is None and False)
+    except EOFError:
+        check("the socket closes", True)
+
+
+def test_user_setup_and_removal(keyway, stand_in):
+    environment, systemctl_log = stand_in
+    autostart = Path(os.environ["XDG_CONFIG_HOME"]) / "autostart" / "keyway.desktop"
+    marker = Path(os.environ["XDG_STATE_HOME"]) / "keyway" / "turned-on"
+    packaged = any((Path(directory) / PACKAGED_MARKER).exists()
+                   for directory in os.environ.get("XDG_DATA_DIRS", "").split(":") if directory)
+
+    def run_keyway(*arguments):
+        return run_with(environment, keyway, *arguments)
+
+    desktop.disable_extension()
+    wait_until("the indicator goes with the extension", lambda: not keyway_indicator_exists())
+
+    result = run_keyway("session-start")
+    check("the first login's session entry succeeds", result.returncode == 0, result.stderr)
+    check("it enables the extension", EXTENSION_UUID in desktop.enabled_extensions(),
+          desktop.enabled_extensions())
+    wait_until("the desktop loads it and replaces the switcher at once",
+               lambda: indicator_shows("br") and not desktop_switcher_is_visible())
+    check("it starts the agent",
+          "--user start keyway.service" in systemctl_log.read_text())
+
+    desktop.disable_extension()
+    wait_until("the user turns the extension off", lambda: not keyway_indicator_exists())
+    result = run_keyway("session-start")
+    check("the next login's session entry succeeds", result.returncode == 0, result.stderr)
+    check("and respects that", EXTENSION_UUID not in desktop.enabled_extensions(),
+          desktop.enabled_extensions())
+
+    result = run_keyway("setup")
+    check("setup succeeds", result.returncode == 0, result.stderr)
+    check("setup enables the extension", EXTENSION_UUID in desktop.enabled_extensions(),
+          desktop.enabled_extensions())
+    wait_until("setup overrules a user's earlier off switch", keyway_indicator_exists)
+
+    if packaged:
+        check("setup leaves the package's session entry in charge", not autostart.exists())
+    else:
+        check("setup adds the session start", autostart.exists())
+
+    result = run_keyway("remove")
+    check("remove succeeds", result.returncode == 0, result.stderr)
+    check("remove disables the extension", EXTENSION_UUID not in desktop.enabled_extensions(),
+          desktop.enabled_extensions())
+    wait_until("the desktop's own switcher returns", desktop_switcher_is_visible)
+    check("remove forgets that Keyway was on", not packaged or not marker.exists())
+
+    if packaged:
+        check("remove hides the package's session entry",
+              "Hidden=true" in autostart.read_text())
+    else:
+        check("remove takes the session start away", not autostart.exists())
+
+
+def main():
+    global desktop
+
+    desktop = DESKTOPS[sys.argv[1]]()
+    keyway, window_script, work_dir = sys.argv[2], sys.argv[3], Path(sys.argv[4])
+    runtime_dir = Path(os.environ["XDG_RUNTIME_DIR"])
+    config_path = Path(os.environ["XDG_CONFIG_HOME"]) / "keyway" / "config.toml"
+
+    check("environment is isolated",
+          os.environ["GSETTINGS_BACKEND"] == "keyfile"
+          and str(work_dir) in os.environ["HOME"])
+
+    result = run_quietly(keyway, "setup", "--no-activate")
+    check("setup writes the extension", result.returncode == 0, result.stderr)
+    desktop.set_layouts(TWO_LAYOUTS)
+    stand_in = systemctl_stand_in(work_dir)
+
+    with (work_dir / "shell.log").open("w") as shell_log, (work_dir / "agent.log").open("w") as agent_log:
+        processes = desktop.start(shell_log)
+        agent = None
+
+        try:
+            wait_until("desktop is up", lambda: '"true"' in desktop_eval("String(!!global.display)"))
+
+            router = FakeRouter(runtime_dir / SOCKET_NAME)
+            agent = subprocess.Popen([keyway, "run", "--socket", str(router.path)],
+                                     stdout=agent_log, stderr=subprocess.STDOUT)
+
+            test_waits_for_extension_then_configures(router)
+            test_replaces_the_desktop_switcher()
+            test_taskbar_menu_opens_the_settings_window()
+            test_shortcuts_switch_layouts(router)
+
+            if isinstance(desktop, GnomeDesktop):
+                test_super_space_has_no_popup()
+
+            test_alt_codes_reach_a_text_window(router, window_script)
+            test_alt_codes_without_text_input(router, window_script)
+
+            if isinstance(desktop, CinnamonDesktop) and not desktop.has_layout_limit:
+                test_more_layouts_than_an_x_keymap_holds(router, window_script)
+
+            test_right_alt_follows_the_layout(router)
+            test_configuration_reloads(router, config_path)
+            test_own_shortcut_leaves_the_switching(router, config_path, keyway)
+            test_command_line(keyway)
+            test_restart_loads_a_changed_extension(router, keyway, config_path, stand_in)
+
+            if isinstance(desktop, GnomeDesktop):
+                test_restart_without_the_loader(router, keyway, stand_in)
+
+            test_extension_loss_releases_the_router(router, keyway, stand_in)
+            test_router_loss_reconnects(router)
+            test_stop_signal(router, agent)
+            test_user_setup_and_removal(keyway, stand_in)
+        finally:
+            if agent is not None and agent.poll() is None:
+                agent.terminate()
+                agent.wait()
+
+            for process in processes:
+                process.terminate()
+                process.wait()
+
+    print("ALL HEADLESS TESTS PASSED", flush=True)
+
+
+if __name__ == "__main__":
+    main()

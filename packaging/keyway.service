@@ -1,0 +1,17 @@
+# Module: keyway.packaging.agent_service
+# Purpose: Run the Keyway agent for the logged-in user's graphical session.
+# Created: 2026-11-08
+# Architecture: Installed by keyway setup or a package, which fill in the binary's path.
+
+[Unit]
+Description=Keyway keyboard language agent
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=@KEYWAY_BIN@ run
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
