@@ -47,14 +47,14 @@ const SETTINGS_LABELS = {
     'en': 'Keyway settings',
     'es': 'Configuración de Keyway',
     'pt-BR': 'Configurações do Keyway',
-    'el': 'Ρυθμίσεις Keyway',
+    'el': 'Ρυθμίσεις του Keyway',
     'pt-PT': 'Definições do Keyway',
 };
 const KEYBOARD_LABELS = {
     'en': 'On-screen keyboard',
     'es': 'Teclado en pantalla',
     'pt-BR': 'Teclado virtual',
-    'el': 'Εικονικό πληκτρολόγιο',
+    'el': 'Πληκτρολόγιο οθόνης',
     'pt-PT': 'Teclado virtual',
 };
 const LANGUAGE_LABELS = {

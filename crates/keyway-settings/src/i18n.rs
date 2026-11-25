@@ -114,7 +114,7 @@ pub enum Message {
 }
 
 /// Returns the message in a language. Translations by the author; the Greek and the Spanish
-/// need review by a native speaker.
+/// were proofread, but not yet by a native speaker.
 pub const fn text(language: Language, message: Message) -> &'static str {
     use Language::{
         BrazilianPortuguese as Br, English as En, EuropeanPortuguese as Pt, Greek as El,
@@ -209,7 +209,7 @@ pub const fn text(language: Language, message: Message) -> &'static str {
             Es => "Cada ventana conserva la última distribución usada en ella.",
             Br => "Cada janela mantém o último layout usado nela.",
             Pt => "Cada janela mantém o último esquema usado nela.",
-            El => "Κάθε παράθυρο κρατά τη διάταξη που χρησιμοποιήσατε τελευταία.",
+            El => "Κάθε παράθυρο κρατά τη διάταξη που χρησιμοποιήσατε τελευταία σε αυτό.",
         },
         M::ShowFlags => match language {
             En => "Show country flags",
@@ -228,7 +228,7 @@ pub const fn text(language: Language, message: Message) -> &'static str {
             En => "On-screen keyboard colors",
             Es => "Colores del teclado en pantalla",
             Br | Pt => "Cores do teclado virtual",
-            El => "Χρώματα εικονικού πληκτρολογίου",
+            El => "Χρώματα πληκτρολογίου οθόνης",
         },
         M::KeyboardColorsNote => match language {
             En => "The keyboard opens from Keyway's menu in the taskbar.",
@@ -250,19 +250,19 @@ pub const fn text(language: Language, message: Message) -> &'static str {
         },
         M::SystemKeyboard => match language {
             En => "System keyboard settings",
-            Es => "Configuración de teclado del sistema",
+            Es => "Configuración del teclado del sistema",
             Br | Pt => "Configurações de teclado do sistema",
-            El => "Ρυθμίσεις πληκτρολογίου συστήματος",
+            El => "Ρυθμίσεις πληκτρολογίου του συστήματος",
         },
         M::SystemKeyboardNote => match language {
             En => "Shows this same list, plus typing options and the system's own shortcuts.",
             Es => {
-                "Muestra esta misma lista, opciones de escritura y los atajos propios del sistema."
+                "Muestra esta misma lista, además de opciones de escritura y los atajos propios del sistema."
             }
             Br => "Mostra esta mesma lista, opções de digitação e os atalhos do próprio sistema.",
             Pt => "Mostra esta mesma lista, opções de escrita e os atalhos do próprio sistema.",
             El => {
-                "Δείχνει την ίδια λίστα, επιλογές πληκτρολόγησης και τις συντομεύσεις του συστήματος."
+                "Εμφανίζει την ίδια λίστα, καθώς και επιλογές πληκτρολόγησης και τις συντομεύσεις του ίδιου του συστήματος."
             }
         },
         M::Open => match language {
@@ -273,7 +273,7 @@ pub const fn text(language: Language, message: Message) -> &'static str {
         },
         M::OpenFailed => match language {
             En => "Couldn't open the system's keyboard settings.",
-            Es => "No se pudo abrir la configuración de teclado del sistema.",
+            Es => "No se pudo abrir la configuración del teclado del sistema.",
             Br | Pt => "Não foi possível abrir as configurações de teclado do sistema.",
             El => "Δεν ήταν δυνατό το άνοιγμα των ρυθμίσεων πληκτρολογίου του συστήματος.",
         },
@@ -297,7 +297,7 @@ pub const fn text(language: Language, message: Message) -> &'static str {
                 "Carrega de novo a versão instalada, como após uma atualização. Pode pedir a palavra-passe de administrador."
             }
             El => {
-                "Φορτώνει ξανά την εγκατεστημένη έκδοση, όπως μετά από μια ενημέρωση. Μπορεί να ζητήσει τον κωδικό διαχειριστή."
+                "Φορτώνει ξανά την εγκατεστημένη έκδοση, όπως μετά από μια ενημέρωση. Μπορεί να ζητήσει τον κωδικό πρόσβασης ενός διαχειριστή."
             }
         },
         M::Restart => match language {
@@ -366,7 +366,7 @@ pub const fn text(language: Language, message: Message) -> &'static str {
                 "1.  Copy the line below.\n2.  Press Alt+F2, type lg and press Enter.\n3.  Paste the line at the prompt, press Enter, then Esc."
             }
             Es => {
-                "1.  Copie la línea de abajo.\n2.  Pulse Alt+F2, escriba lg y pulse Intro.\n3.  Pegue la línea en el indicador, pulse Intro y después Esc."
+                "1.  Copie la línea de abajo.\n2.  Pulse Alt+F2, escriba lg y pulse Intro.\n3.  Pegue la línea en el cuadro de entrada, pulse Intro y después Esc."
             }
             Br => {
                 "1.  Copie a linha abaixo.\n2.  Pressione Alt+F2, digite lg e pressione Enter.\n3.  Cole a linha no prompt, pressione Enter e depois Esc."
@@ -404,7 +404,7 @@ pub const fn text(language: Language, message: Message) -> &'static str {
                 "The system has its own layout shortcut on modifier keys, so one press may switch twice."
             }
             Es => {
-                "El sistema tiene su propio atajo de distribución en teclas modificadoras, así que una pulsación puede cambiar dos veces."
+                "El sistema tiene su propio atajo para cambiar de distribución con teclas modificadoras, así que una pulsación puede cambiarla dos veces."
             }
             Br => {
                 "O sistema tem um atalho próprio de layout em teclas modificadoras, então um toque pode trocar duas vezes."
@@ -413,18 +413,18 @@ pub const fn text(language: Language, message: Message) -> &'static str {
                 "O sistema tem um atalho próprio de esquema em teclas modificadoras, por isso um toque pode trocar duas vezes."
             }
             El => {
-                "Το σύστημα έχει δική του συντόμευση διάταξης σε πλήκτρα τροποποίησης, οπότε ένα πάτημα μπορεί να αλλάξει δύο φορές."
+                "Το σύστημα έχει δική του συντόμευση αλλαγής διάταξης με πλήκτρα τροποποίησης, οπότε ένα πάτημα μπορεί να αλλάξει τη διάταξη δύο φορές."
             }
         },
         M::UseOnlyKeyway => match language {
             En => "Use only Keyway",
             Es => "Usar solo Keyway",
             Br | Pt => "Usar só o Keyway",
-            El => "Μόνο το Keyway",
+            El => "Χρήση μόνο του Keyway",
         },
         M::Switching => match language {
             En => "Switching",
-            Es => "Cambio",
+            Es => "Cambio de distribución",
             Br | Pt => "Troca",
             El => "Εναλλαγή",
         },
@@ -452,7 +452,7 @@ pub const fn text(language: Language, message: Message) -> &'static str {
             En => "Shortcuts without a final key fire when you release them.",
             Es => "Los atajos sin tecla final se activan al soltar las teclas.",
             Br | Pt => "Atalhos sem tecla final são acionados ao soltar as teclas.",
-            El => "Οι συντομεύσεις χωρίς τελικό πλήκτρο ενεργοποιούνται όταν τα αφήσετε.",
+            El => "Οι συντομεύσεις χωρίς τελικό πλήκτρο ενεργοποιούνται όταν αφήσετε τα πλήκτρα.",
         },
         M::SwitchingOrder => match language {
             En => "Switching order",
@@ -464,7 +464,7 @@ pub const fn text(language: Language, message: Message) -> &'static str {
             En => "List order",
             Es => "Orden de la lista",
             Br | Pt => "Ordem da lista",
-            El => "Σειρά λίστας",
+            El => "Σειρά της λίστας",
         },
         M::OrderRecent => match language {
             En => "Most recent first",
@@ -511,11 +511,11 @@ pub const fn text(language: Language, message: Message) -> &'static str {
         M::AltCodesNote => match language {
             En => "Hold Left Alt, type digits on the keypad and release Alt.",
             Es => {
-                "Mantenga pulsado Alt izquierdo, escriba dígitos en el teclado numérico y suelte Alt."
+                "Mantenga pulsada la tecla Alt izquierda, escriba los dígitos en el teclado numérico y suelte Alt."
             }
             Br | Pt => "Segure o Alt esquerdo, digite no teclado numérico e solte o Alt.",
             El => {
-                "Κρατήστε το αριστερό Alt, πληκτρολογήστε ψηφία στο αριθμητικό πληκτρολόγιο και αφήστε το."
+                "Κρατήστε πατημένο το αριστερό Alt, πληκτρολογήστε τα ψηφία στο αριθμητικό πληκτρολόγιο και αφήστε το Alt."
             }
         },
         M::TypeByCode => match language {
@@ -551,9 +551,13 @@ pub const fn text(language: Language, message: Message) -> &'static str {
         },
         M::HexCodesNote => match language {
             En => "Alt, keypad plus, then a hex Unicode value.",
-            Es => "Alt, el más del teclado numérico y un valor Unicode en hexadecimal.",
+            Es => {
+                "Alt, el signo más del teclado numérico y después un valor Unicode en hexadecimal."
+            }
             Br | Pt => "Alt, mais do teclado numérico e um valor Unicode em hexadecimal.",
-            El => "Alt, συν του αριθμητικού πληκτρολογίου και δεκαεξαδική τιμή Unicode.",
+            El => {
+                "Alt, το συν του αριθμητικού πληκτρολογίου και μετά μια δεκαεξαδική τιμή Unicode."
+            }
         },
         M::UnicodeCodes => match language {
             En => "Unicode above 255",
@@ -563,12 +567,14 @@ pub const fn text(language: Language, message: Message) -> &'static str {
         },
         M::UnicodeCodesNote => match language {
             En => "Windows wraps larger codes around 256; this types them as Unicode instead.",
-            Es => "Windows reinicia los códigos mayores cada 256; esto los escribe como Unicode.",
+            Es => {
+                "Windows reduce los códigos mayores a su resto entre 256; esta opción los escribe como Unicode."
+            }
             Br | Pt => {
                 "O Windows reinicia códigos maiores a cada 256; isto os digita como Unicode."
             }
             El => {
-                "Τα Windows αναδιπλώνουν τους μεγαλύτερους κωδικούς στο 256· αυτό τους γράφει ως Unicode."
+                "Τα Windows κρατούν από τους μεγαλύτερους κωδικούς το υπόλοιπο της διαίρεσης με το 256· αυτή η επιλογή τούς γράφει ως Unicode."
             }
         },
         M::CodePages => match language {
@@ -595,7 +601,7 @@ pub const fn text(language: Language, message: Message) -> &'static str {
             En => "Cancel",
             Es => "Cancelar",
             Br | Pt => "Cancelar",
-            El => "Άκυρο",
+            El => "Ακύρωση",
         },
         M::Add => match language {
             En => "Add",
@@ -644,13 +650,13 @@ pub const fn text(language: Language, message: Message) -> &'static str {
             En => "That key can't be used in a shortcut. Try another.",
             Es => "Esa tecla no se puede usar en un atajo. Pruebe otra.",
             Br | Pt => "Essa tecla não pode ser usada em um atalho. Tente outra.",
-            El => "Αυτό το πλήκτρο δεν μπορεί να χρησιμοποιηθεί. Δοκιμάστε άλλο.",
+            El => "Αυτό το πλήκτρο δεν μπορεί να χρησιμοποιηθεί σε συντόμευση. Δοκιμάστε άλλο.",
         },
         M::NeedsMoreKeys => match language {
             En => "That would stop the key from typing. Add Ctrl, Alt or Super.",
             Es => "Eso impediría que la tecla escribiera. Añada Ctrl, Alt o Super.",
             Br | Pt => "Isso impediria a tecla de digitar. Adicione Ctrl, Alt ou Super.",
-            El => "Έτσι το πλήκτρο δεν θα πληκτρολογεί. Προσθέστε Ctrl, Alt ή Super.",
+            El => "Έτσι το πλήκτρο θα έπαυε να γράφει. Προσθέστε Ctrl, Alt ή Super.",
         },
         M::ShortcutInUse => match language {
             En => "That shortcut is already in use. Try another.",
@@ -675,7 +681,7 @@ pub const fn text(language: Language, message: Message) -> &'static str {
                 "O arquivo de configurações tem um erro, então os padrões são mostrados. Uma cópia será mantida se você alterar algo aqui."
             }
             El => {
-                "Το αρχείο ρυθμίσεων έχει σφάλμα, οπότε εμφανίζονται οι προεπιλογές. Θα κρατηθεί αντίγραφο αν αλλάξετε κάτι εδώ."
+                "Το αρχείο ρυθμίσεων έχει σφάλμα, οπότε εμφανίζονται οι προεπιλογές. Θα κρατηθεί αντίγραφό του αν αλλάξετε κάτι εδώ."
             }
         },
         M::ConfigBackedUp => match language {

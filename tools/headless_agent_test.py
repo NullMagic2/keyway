@@ -936,10 +936,10 @@ def test_screenshot_tools_cover_the_keyboard(window_script):
 LANGUAGE_NAMES = ["English", "Espa\u00f1ol", "Portugu\u00eas (Brasil)",
                   "\u0395\u03bb\u03bb\u03b7\u03bd\u03b9\u03ba\u03ac", "Portugu\u00eas (Portugal)"]
 LANGUAGE_MENU_LABEL = "Language"
-GREEK_MENU_LABELS = ["\u0395\u03b9\u03ba\u03bf\u03bd\u03b9\u03ba\u03cc"
-                     " \u03c0\u03bb\u03b7\u03ba\u03c4\u03c1\u03bf\u03bb\u03cc\u03b3\u03b9\u03bf",
+GREEK_MENU_LABELS = ["\u03a0\u03bb\u03b7\u03ba\u03c4\u03c1\u03bf\u03bb\u03cc\u03b3\u03b9\u03bf"
+                     " \u03bf\u03b8\u03cc\u03bd\u03b7\u03c2",
                      "\u0393\u03bb\u03ce\u03c3\u03c3\u03b1",
-                     "\u03a1\u03c5\u03b8\u03bc\u03af\u03c3\u03b5\u03b9\u03c2 Keyway"]
+                     "\u03a1\u03c5\u03b8\u03bc\u03af\u03c3\u03b5\u03b9\u03c2 \u03c4\u03bf\u03c5 Keyway"]
 BRAZILIAN_MENU_LABELS = ["Teclado virtual", "Idioma", "Configura\u00e7\u00f5es do Keyway"]
 ENGLISH_MENU_LABELS = [KEYBOARD_MENU_LABEL, LANGUAGE_MENU_LABEL, "Keyway settings"]
 BRAZILIAN_LAYOUT_NAMES = Path("/usr/share/locale-langpack/pt_BR/LC_MESSAGES/xkeyboard-config.mo")
