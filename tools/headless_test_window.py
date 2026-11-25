@@ -3,6 +3,7 @@ Module: keyway.tools.headless_test_window
 Purpose: A focused GTK window reporting what it receives, for the headless agent test.
 Created: 2026-11-08
 Architecture: Mode entry accepts text input; mode keys has none, like many older clients.
+Mode overlay covers the screen and stays above other windows, like a screenshot tool.
 """
 
 import sys
@@ -32,6 +33,11 @@ def main():
         entry = Gtk.Entry()
         entry.connect("changed", lambda widget: report(f"TEXT {widget.get_text()}"))
         window.add(entry)
+    elif mode == "overlay":
+        window.set_keep_above(True)
+        window.fullscreen()
+        window.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        window.connect("button-press-event", lambda *_: report("CLICK"))
     else:
         window.connect("key-press-event", report_key)
 

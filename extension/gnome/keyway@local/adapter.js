@@ -391,8 +391,10 @@ class KeyboardViewer {
         this._panel.add_child(title);
         this._panel.add_child(this._keyArea);
 
-        // Above windows, full screen ones included, and part of what takes clicks.
-        Main.layoutManager.addTopChrome(this._panel);
+        // Above windows, full screen ones included, and part of what takes clicks. Yet under
+        // what the Shell keeps above them all, so that a screenshot tool showing a picture of
+        // the screen, keyboard included, covers the keyboard itself.
+        Main.layoutManager.addChrome(this._panel);
 
         this.showTheme();
         this.showLayout();

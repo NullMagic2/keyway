@@ -64,6 +64,17 @@ SHELL_TOUCH = """(() => {
 TOUCH_DOWN = "notify_touch_down(GLib.get_monotonic_time(), 0, %d, %d)"
 TOUCH_MOTION = "notify_touch_motion(GLib.get_monotonic_time(), 0, %d, %d)"
 TOUCH_UP = "notify_touch_up(GLib.get_monotonic_time(), 0)"
+# Puts a window above every other, as a screenshot tool's extension does for its picture of the
+# screen, since a Wayland window cannot ask for that itself.
+SHELL_LIFT_WINDOW = """(() => {
+    const actor = global.get_window_actors()
+        .find(actor => actor.get_meta_window().get_title() === '%s');
+    actor.hide();
+    actor.get_parent().remove_child(actor);
+    global.top_window_group.add_child(actor);
+    actor.show();
+})()"""
+SHELL_ACTOR_AT = ("global.stage.get_actor_at_pos(imports.gi.Clutter.PickMode.REACTIVE, %d, %d)")
 HOLD_SUPER_TAP_SPACE = "['KEY_Super_L', 1], ['KEY_space', 1], ['KEY_space', 0]"
 HOLD_SHIFT_SUPER_TAP_SPACE = "['KEY_Shift_L', 1], " + HOLD_SUPER_TAP_SPACE
 RELEASE_SUPER = "['KEY_Super_L', 0]"
@@ -177,6 +188,9 @@ class GnomeDesktop:
 
         desktop_eval(SHELL_POINTER % (x, y, button))
 
+    def keep_above_others(self, title):
+        desktop_eval(SHELL_LIFT_WINDOW % title)
+
 
 class CinnamonDesktop:
     """Cinnamon 6.4 and older on a private X server, whose daemon applies the layouts."""
@@ -240,6 +254,9 @@ class CinnamonDesktop:
         button = [] if pressed is None else ["mousedown" if pressed else "mouseup", "1"]
 
         run_quietly("xdotool", "mousemove", str(x), str(y), *button)
+
+    def keep_above_others(self, _title):
+        """An X window asks for this itself, and the window manager grants it."""
 
 
 class InputSourceCinnamonDesktop(CinnamonDesktop):
@@ -760,6 +777,48 @@ def test_on_screen_keyboard_by_touch(window_script):
     window.close()
 
 
+def test_screenshot_tools_cover_the_keyboard(window_script):
+    """A tool shows a picture of the screen, keyboard included, and must get the clicks on it."""
+    desktop_eval(f"{keyboard()}.show()")
+    wait_until("the keyboard is shown for a screenshot", lambda: key_shows(KEY_Q, "q"))
+
+    x, y = centre_of(f"{keyboard_key(KEY_Q)}.actor")
+
+    if isinstance(desktop, GnomeDesktop):
+        desktop_eval("Main.screenshotUI.open()")
+        wait_until("the Shell's own screenshot tool opens over the keyboard",
+                   lambda: '"true"' in desktop_eval(
+                       f"String(Main.screenshotUI.visible && !{keyboard()}._panel.contains("
+                       f"{SHELL_ACTOR_AT % (x, y)}))"))
+        desktop_eval("Main.screenshotUI.close(true)")
+        wait_until("and closes again",
+                   lambda: '"false"' in desktop_eval("String(Main.screenshotUI.visible)"))
+
+    window = TestWindow(window_script, "overlay")
+    window.wait_for_focus(expect_text_input=False)
+    desktop.keep_above_others(window.title)
+
+    def window_was_clicked():
+        desktop.pointer(x, y, pressed=True)
+        desktop.pointer(x, y, pressed=False)
+
+        return "CLICK" in window.lines
+
+    wait_until("a full screen window kept above the others gets a click where a key is",
+               window_was_clicked)
+    check("which presses no key", '"0"' in desktop_eval(f"String({keyboard()}._held.size)"))
+    window.close()
+
+    def close_button_hides_it():
+        if keyboard_is_shown():
+            click(f"{keyboard()}._panel.get_first_child().get_last_child()")
+
+        return not keyboard_is_shown()
+
+    wait_until("once it is gone the keyboard takes clicks again, on its close button",
+               close_button_hides_it)
+
+
 def test_shortcuts_switch_layouts(router):
     check("starts on br", active_source() == "br", active_source())
 
@@ -1226,6 +1285,7 @@ def main():
             if isinstance(desktop, GnomeDesktop):
                 test_on_screen_keyboard_by_touch(window_script)
 
+            test_screenshot_tools_cover_the_keyboard(window_script)
             test_shortcuts_switch_layouts(router)
 
             if isinstance(desktop, GnomeDesktop):

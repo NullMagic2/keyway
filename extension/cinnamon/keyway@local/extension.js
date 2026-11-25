@@ -460,11 +460,13 @@ class KeyboardViewer {
 
         this._keymap = Clutter.get_default_backend().get_default_seat().get_keymap();
         this._keymapId = this._keymap.connect('state-changed', () => this._showLabels());
+        this._focusId = global.display.connect('notify::focus-window', () => this._giveWay());
     }
 
     destroy() {
         this.hide();
         this._keymap.disconnect(this._keymapId);
+        global.display.disconnect(this._focusId);
     }
 
     toggle() {
@@ -510,6 +512,7 @@ class KeyboardViewer {
         // Above windows, full screen ones included, and part of what takes clicks.
         Main.layoutManager.addChrome(this._panel, {visibleInFullscreen: true});
 
+        this._giveWay();
         this.showTheme();
         this.showLayout();
         this.showKeys();
@@ -525,6 +528,17 @@ class KeyboardViewer {
         this._panel.destroy();
         this._panel = null;
         this._keys = [];
+    }
+
+    // A full screen window kept above the others is a screenshot tool showing a picture of the
+    // screen, keyboard included. Cinnamon draws the keyboard above any window, so it hides.
+    _giveWay() {
+        if (!this._panel)
+            return;
+
+        const window = global.display.focus_window;
+
+        this._panel.visible = !(window?.is_fullscreen() && window.is_above());
     }
 
     // Gives the keyboard the colours the user chose.
