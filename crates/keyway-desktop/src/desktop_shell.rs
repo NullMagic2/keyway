@@ -7,6 +7,7 @@
 use crate::xkb::{LayoutKeymap, right_alt_is_altgr};
 use keyway_core::config::KeyboardTheme;
 use keyway_core::keyboard_view::{KeyboardView, ViewCell};
+use keyway_core::language::Language;
 use keyway_core::layout_id::LayoutId;
 use std::collections::HashMap;
 use std::fmt;
@@ -25,6 +26,12 @@ const DBUS_NAME: &str = "org.freedesktop.DBus";
 const DBUS_PATH: &str = "/org/freedesktop/DBus";
 const NAME_OWNER_CHANGED: &str = "NameOwnerChanged";
 const NAME_ARGUMENT: u8 = 0;
+
+/// The signal with which the extension passes on a language chosen in its menu.
+const LANGUAGE_CHOSEN: &str = "LanguageChosen";
+
+/// How the interface writes that Keyway's texts follow the desktop's language.
+const DESKTOP_LANGUAGE: &str = "";
 
 /// How the interface writes a place of the on-screen keyboard that has no key.
 const GAP_ROLE: &str = "gap";
@@ -107,6 +114,8 @@ impl<E: Into<DesktopError>> From<E> for ReloadError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DesktopEvent {
     Changed,
+    /// The user chose a language for Keyway's texts in the extension's menu.
+    LanguageChosen(Language),
     /// The extension's bus name lost its owner. An extension that answers afterwards may be a
     /// new one, which knows nothing the earlier one was told.
     ExtensionStopped,
@@ -236,6 +245,18 @@ impl DesktopShell {
         Ok(self.proxy.call("SetKeyboardTheme", &(theme.name(),))?)
     }
 
+    /// Tells the extension which language its texts are in, None for the desktop's, and the
+    /// names of layouts in that language by source id. It keeps the desktop's name for others.
+    pub fn set_language(
+        &self,
+        language: Option<Language>,
+        layout_names: &HashMap<String, String>,
+    ) -> Result<(), DesktopError> {
+        let tag = language.map_or(DESKTOP_LANGUAGE, Language::tag);
+
+        Ok(self.proxy.call("SetLanguage", &(tag, layout_names))?)
+    }
+
     fn name_has_owner(&self, name: &str) -> Result<bool, DesktopError> {
         let reply = self.connection.call_method(
             Some(DBUS_NAME),
@@ -313,8 +334,9 @@ impl DesktopShell {
     }
 
     /// Calls notify whenever the desktop's input state may have changed, or the extension
-    /// appeared or went away. It is only a hint to read a new snapshot, so its source does
-    /// not need to be trusted. Calls on_session_end if the bus connection ends, which means
+    /// appeared or went away, or the user chose a language. A change is only a hint to read a
+    /// new snapshot, and a language is one of Keyway's own, so the source of neither needs to
+    /// be trusted. Calls on_session_end if the bus connection ends, which means
     /// the session is over. Watching is in place when this returns.
     pub fn watch(
         &self,
@@ -339,12 +361,14 @@ impl DesktopShell {
 
             thread::spawn(move || {
                 for message in messages {
-                    let stopped = reports_owner && message.is_ok_and(|change| owner_left(&change));
+                    let message = message.ok();
+                    let stopped = reports_owner && message.as_ref().is_some_and(owner_left);
+                    let language = message.as_ref().and_then(chosen_language);
 
-                    notify(if stopped {
-                        DesktopEvent::ExtensionStopped
-                    } else {
-                        DesktopEvent::Changed
+                    notify(match language {
+                        _ if stopped => DesktopEvent::ExtensionStopped,
+                        Some(language) => DesktopEvent::LanguageChosen(language),
+                        None => DesktopEvent::Changed,
                     });
                 }
 
@@ -354,6 +378,17 @@ impl DesktopShell {
 
         Ok(())
     }
+}
+
+/// The language a signal of the extension passes on, if it is that signal.
+fn chosen_language(signal: &Message) -> Option<Language> {
+    let header = signal.header();
+
+    if header.member()?.as_str() != LANGUAGE_CHOSEN {
+        return None;
+    }
+
+    Language::from_tag(signal.body().deserialize::<(&str,)>().ok()?.0)
 }
 
 /// Whether a name owner change left the name without an owner.

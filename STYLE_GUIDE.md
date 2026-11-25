@@ -37,8 +37,9 @@ The only runtime code outside Rust is the desktop extensions, because the GNOME 
 and Cinnamon APIs are reachable only from JavaScript inside each desktop; scripts under
 tools/ run only during development. Keep each extension a thin adapter with no policy,
 offering the same D-Bus interface: it activates a source, commits text, reports changes,
-adds a settings entry to the taskbar menu, and draws the on-screen keyboard as the agent lays
-it out, pressing the keys the user clicks.
+adds a settings entry and Keyway's languages to the taskbar menu, passing a chosen language on
+for the agent to save, and draws the on-screen keyboard as the agent lays it out, pressing the
+keys the user clicks.
 
 ## Reusable modules and clear boundaries
 

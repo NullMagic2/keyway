@@ -1,7 +1,8 @@
 //! Module: keyway_desktop::config_file
 //! Purpose: Find, read and atomically save the user's configuration file.
 //! Created: 2026-11-08
-//! Architecture: The agent reloads this file when it changes; the settings window writes it.
+//! Architecture: The agent reloads this file when it changes. The settings window writes it,
+//! and so does the agent for the language chosen in the taskbar menu.
 
 use keyway_core::config::{Config, MAX_CONFIG_BYTES};
 use std::env;

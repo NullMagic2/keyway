@@ -48,6 +48,12 @@
     font-size: 12px;
 }
 
+/* What a key types with Shift, in its upper corner, and with AltGr, in its lower one. */
+.keyway-key-hint {
+    font-size: 11px;
+    padding: 1px 5px;
+}
+
 /* Light: white keys on a pale panel, with the keys that type no character a shade darker. */
 
 .keyway-keyboard-light {
@@ -71,6 +77,10 @@
     background-color: #ffffff;
     box-shadow: 0 1px 1px rgba(0, 0, 0, 0.22);
     color: #1e1e24;
+}
+
+.keyway-keyboard-light .keyway-key-hint {
+    color: rgba(30, 30, 36, 0.6);
 }
 
 .keyway-keyboard-light .keyway-key:hover {
@@ -116,6 +126,10 @@
 .keyway-keyboard-dark .keyway-key {
     background-color: #4d4d55;
     color: #ffffff;
+}
+
+.keyway-keyboard-dark .keyway-key-hint {
+    color: rgba(255, 255, 255, 0.65);
 }
 
 .keyway-keyboard-dark .keyway-key:hover {

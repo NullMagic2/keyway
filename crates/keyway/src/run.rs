@@ -7,9 +7,13 @@
 use crate::agent::{Agent, AgentAction};
 use keyway_core::code_pages::{CodePageCatalog, LayoutCodePages};
 use keyway_core::config::Config;
+use keyway_core::language::Language;
 use keyway_core::protocol::{AgentMessage, LineFramer, decode_message, encode_message};
-use keyway_desktop::config_file::{CONFIG_FILE_NAME, config_directory, load_config};
+use keyway_desktop::config_file::{
+    CONFIG_FILE_NAME, back_up_invalid_config, config_directory, load_config, save_config,
+};
 use keyway_desktop::desktop_shell::{DesktopEvent, DesktopShell};
+use keyway_desktop::layout_names::names_of;
 use nix::sys::inotify::{AddWatchFlags, InitFlags, Inotify};
 use nix::sys::signal::{SigSet, Signal};
 use std::fs;
@@ -30,6 +34,7 @@ enum Event {
     Stop,
     DesktopChanged,
     ExtensionStopped,
+    LanguageChosen(Language),
     ConfigChanged,
     RouterConnected(u64, UnixStream),
     RouterLine(u64, String),
@@ -211,6 +216,23 @@ impl Runtime {
         }
     }
 
+    /// Saves the language the user chose in the taskbar menu. The extension learns it as it
+    /// learns any change to the file, so that the menu shows what was saved. A file with an
+    /// error is set aside first, as the settings window does, and the last good one written.
+    fn handle_language_chosen(&mut self, language: Language) {
+        let mut config = load_config(&self.config_path).unwrap_or_else(|_| {
+            let _ = back_up_invalid_config(&self.config_path);
+
+            self.agent.config().clone()
+        });
+
+        config.interface.language = Some(language);
+
+        if let Err(error) = save_config(&self.config_path, &config) {
+            log_state(&format!("could not save the language: {error}"));
+        }
+    }
+
     fn connect_router(&mut self, delay_first: bool) {
         if self.router.is_some() || self.connecting || !self.agent.desktop_available() {
             return;
@@ -309,6 +331,18 @@ impl Runtime {
                         log_state(&format!("could not set the keyboard's colours: {error}"));
                     }
                 }
+                AgentAction::SetLanguage(language) => {
+                    let layouts = self.agent.sources().iter();
+                    let layouts = layouts.map(|source| (&source.id, &source.xkb_id));
+                    let names = language.map(|language| names_of(language, layouts));
+
+                    if let Err(error) = self
+                        .shell
+                        .set_language(language, &names.unwrap_or_default())
+                    {
+                        log_state(&format!("could not set the language: {error}"));
+                    }
+                }
                 AgentAction::Send(message) => self.send_to_router(&message),
                 AgentAction::DropRouter => {
                     log_state("router speaks another protocol version");
@@ -344,6 +378,7 @@ impl Runtime {
                 Event::Stop => break,
                 Event::DesktopChanged => self.handle_desktop_changed(),
                 Event::ExtensionStopped => self.handle_extension_stopped(),
+                Event::LanguageChosen(language) => self.handle_language_chosen(language),
                 Event::ConfigChanged => self.handle_config_changed(),
                 Event::RouterConnected(connection, stream) => {
                     self.handle_router_connected(connection, stream);
@@ -384,6 +419,7 @@ pub fn run_agent(socket_path: PathBuf) -> Result<(), Box<dyn std::error::Error>>
             let _ = desktop_events.send(match event {
                 DesktopEvent::Changed => Event::DesktopChanged,
                 DesktopEvent::ExtensionStopped => Event::ExtensionStopped,
+                DesktopEvent::LanguageChosen(language) => Event::LanguageChosen(language),
             });
         },
         move || {

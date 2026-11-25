@@ -99,17 +99,18 @@ pub struct SettingsApp {
 }
 
 impl SettingsApp {
-    /// Builds the window from the system's layouts and the saved configuration.
-    pub fn new(language: Language) -> Result<Rc<Self>, Box<dyn Error>> {
+    /// Builds the window from the system's layouts and the saved configuration, in the
+    /// language saved there or else the desktop's.
+    pub fn new(desktop_language: Language) -> Result<Rc<Self>, Box<dyn Error>> {
         let config_path = config_directory()?.join(CONFIG_FILE_NAME);
         let catalog = load_catalog(Path::new(SYSTEM_RULES_PATH))?;
 
-        Self::with_parts(language, config_path, catalog)
+        Self::with_parts(desktop_language, config_path, catalog)
     }
 
     /// Builds the window from explicit inputs.
     pub fn with_parts(
-        language: Language,
+        desktop_language: Language,
         config_path: PathBuf,
         catalog: Vec<CatalogEntry>,
     ) -> Result<Rc<Self>, Box<dyn Error>> {
@@ -119,6 +120,7 @@ impl SettingsApp {
             Ok(config) => (config, false),
             Err(_) => (Config::default(), true),
         };
+        let language = config.interface.language.unwrap_or(desktop_language);
 
         let window = gtk::Window::new(gtk::WindowType::Toplevel);
         window.set_default_size(WINDOW_WIDTH, -1);
@@ -488,6 +490,12 @@ impl SettingsApp {
 
         let saved = {
             let mut state = self.state.borrow_mut();
+
+            // The taskbar menu may have saved a language since this window read the file.
+            if let Ok(saved) = load_config(&state.config_path) {
+                state.config.interface = saved.interface;
+            }
+
             change(&mut state.config);
 
             let path = state.config_path.clone();
@@ -535,6 +543,7 @@ impl SettingsApp {
             .unicode_above_255
             .set_active(config.alt_codes.unicode_above_255);
         self.alt_codes.show_code_pages(
+            self.language,
             &sources,
             &config.alt_codes,
             &self.layout_pages,

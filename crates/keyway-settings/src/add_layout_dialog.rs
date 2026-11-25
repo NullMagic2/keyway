@@ -9,7 +9,9 @@ use gtk::glib;
 use gtk::prelude::*;
 use keyway_core::layout_id::LayoutId;
 use keyway_desktop::layout_catalog::CatalogEntry;
+use keyway_desktop::layout_names::NameCatalog;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 const DIALOG_WIDTH: i32 = 460;
@@ -18,9 +20,26 @@ const CONTENT_SPACING: i32 = 10;
 const CONTENT_MARGIN: i32 = 16;
 const XKB_TRANSLATION_DOMAIN: &str = "xkeyboard-config";
 
-/// Returns a layout description in the desktop's language, from the system's translations.
-pub fn translated_description(description: &str) -> String {
-    glib::dgettext(Some(XKB_TRANSLATION_DOMAIN), description).to_string()
+thread_local! {
+    /// The system's layout names in each language asked for, read once.
+    static NAME_CATALOGS: RefCell<HashMap<Language, Option<NameCatalog>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Returns a layout description in a language, from the system's translations. Where the
+/// system has none for that language, the desktop's own language serves.
+pub fn translated_description(language: Language, description: &str) -> String {
+    NAME_CATALOGS.with(|catalogs| {
+        let mut catalogs = catalogs.borrow_mut();
+        let catalog = catalogs
+            .entry(language)
+            .or_insert_with(|| NameCatalog::load(language));
+
+        match catalog {
+            Some(catalog) => catalog.name(description).to_string(),
+            None => glib::dgettext(Some(XKB_TRANSLATION_DOMAIN), description).to_string(),
+        }
+    })
 }
 
 struct PickerRow {
@@ -87,7 +106,7 @@ impl AddLayoutDialog {
         let rows = Rc::new(RefCell::new(Vec::with_capacity(catalog.len())));
 
         for entry in catalog {
-            let description = translated_description(&entry.description);
+            let description = translated_description(language, &entry.description);
             let available = !already_added.iter().any(|id| id == entry.id.as_str());
             let added_label = widgets::label(text(language, Message::Added), &[DIM, SMALL]);
             let badge = badges.badge(entry.id.as_str(), &entry.short_name, flags_shown, false);

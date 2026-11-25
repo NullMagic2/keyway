@@ -274,7 +274,7 @@ impl LayoutsPage {
             .find(|item| item.id.as_str() == entry.id);
         let title = known.map_or_else(
             || entry.id.clone(),
-            |item| translated_description(&item.description),
+            |item| translated_description(language, &item.description),
         );
         let short_name = known.map_or(entry.id.as_str(), |item| item.short_name.as_str());
 

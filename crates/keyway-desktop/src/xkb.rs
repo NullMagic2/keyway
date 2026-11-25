@@ -200,38 +200,42 @@ impl LayoutKeymap {
         1_u32.checked_shl(index).unwrap_or_default()
     }
 
-    /// Returns what a key types in each state of Shift, AltGr and Caps Lock.
+    /// Returns the symbol a key types in a state of Shift, AltGr and Caps Lock.
+    fn symbol(&self, key: u32, state: LabelState) -> u32 {
+        let mask = |held: bool, name| if held { self.modifier_mask(name) } else { 0 };
+        let held = mask(state.shift, SHIFT_MODIFIER) | mask(state.level3, LEVEL3_MODIFIER);
+        let locked = mask(state.caps_lock, CAPS_LOCK_MODIFIER);
+
+        // SAFETY: the state is live, and only this object uses it, from one thread at a
+        // time. Any key code is accepted; one the keymap lacks has no symbol.
+        unsafe {
+            xkb_state_update_mask(self.state.0, held, 0, locked, 0, 0, 0);
+            xkb_state_key_get_one_sym(self.state.0, key)
+        }
+    }
+
+    /// Returns what a key types in each state, and which of that are accents.
     pub fn key_labels(&self, key: KeyCode) -> KeyLabels {
         let key = u32::from(key.raw()) + EVDEV_TO_XKB_KEYCODE;
-        let mask = |held: bool, name| if held { self.modifier_mask(name) } else { 0 };
 
-        KeyLabels::from_states(|state: LabelState| {
-            let held = mask(state.shift, SHIFT_MODIFIER) | mask(state.level3, LEVEL3_MODIFIER);
-            let locked = mask(state.caps_lock, CAPS_LOCK_MODIFIER);
-
-            // SAFETY: the state is live, and only this object uses it, from one thread at a
-            // time. Any key code is accepted; one the keymap lacks has no symbol.
-            let symbol = unsafe {
-                xkb_state_update_mask(self.state.0, held, 0, locked, 0, 0, 0);
-                xkb_state_key_get_one_sym(self.state.0, key)
-            };
-
-            symbol_label(symbol)
-        })
+        KeyLabels::from_states(|state| symbol_label(self.symbol(key, state)))
+            .with_accents(|state| dead_key_accent(self.symbol(key, state)).is_some())
     }
+}
+
+/// Returns the accent a dead key is shown as, or nothing for any other symbol.
+fn dead_key_accent(symbol: u32) -> Option<char> {
+    let offset = symbol.checked_sub(XKB_KEY_DEAD_GRAVE)?;
+
+    DEAD_KEY_ACCENTS.get(usize::try_from(offset).ok()?).copied()
 }
 
 /// Returns the character a symbol types, or nothing for one that types none.
 fn symbol_label(symbol: u32) -> String {
-    let dead_key = symbol
-        .checked_sub(XKB_KEY_DEAD_GRAVE)
-        .and_then(|offset| DEAD_KEY_ACCENTS.get(usize::try_from(offset).ok()?));
-
     // SAFETY: the call takes any value and reads nothing else.
     let typed = || char::from_u32(unsafe { xkb_keysym_to_utf32(symbol) });
 
-    dead_key
-        .copied()
+    dead_key_accent(symbol)
         .or_else(typed)
         .filter(|character| !character.is_control())
         .map(String::from)
@@ -339,6 +343,17 @@ mod tests {
 
         assert_eq!(accents.get(PLAIN), "\u{b4}");
         assert_eq!(accents.get(SHIFT), "`");
+    }
+
+    #[test]
+    fn only_a_dead_key_is_an_accent() {
+        let accents = labels("br", RIGHT_OF_P);
+        let greek_accents = labels("gr+simple", KeyCode::new(39));
+
+        assert!(accents.is_accent(PLAIN) && accents.is_accent(SHIFT));
+        assert!(greek_accents.is_accent(SHIFT));
+        assert_eq!(greek_accents.get(SHIFT), "\u{a8}");
+        assert!(!labels("us", KeyCode::new(41)).is_accent(SHIFT));
     }
 
     #[test]

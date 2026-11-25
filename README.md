@@ -17,8 +17,8 @@ Keyway is a keyboard language switcher for Linux that works like the one in Wind
   menu to pick another.
 - **Has an on-screen keyboard** that shows where the active layout puts each character, and
   types the keys you click.
-- **Has a settings window** for layouts, shortcuts and Alt codes, in English, Portuguese and
-  Greek.
+- **Has a settings window** for layouts, shortcuts and Alt codes.
+- **Speaks English, Spanish, Portuguese and Greek**, chosen in the taskbar menu.
 
 It runs on GNOME Shell 46 or later and Cinnamon 6.2 or later.
 

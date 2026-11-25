@@ -36,6 +36,15 @@ impl KeyWidth {
     const fn less_one_key(self) -> Self {
         Self(self.0 - Self::ORDINARY.0)
     }
+
+    /// What a key has beyond an ordinary key's width, which it can give to keys beside it.
+    const fn spare(self) -> u8 {
+        self.0.saturating_sub(Self::ORDINARY.0)
+    }
+
+    const fn less(self, quarters: u8) -> Self {
+        Self(self.0 - quarters)
+    }
 }
 
 /// What clicking a key does, beyond pressing it.
@@ -50,6 +59,8 @@ pub enum KeyRole {
     Level3,
     /// Chooses the Caps Lock labels for as long as the desktop reports the lock on.
     CapsLock,
+    /// Types what its key does with Shift, which clicking it holds for that long.
+    Shifted,
 }
 
 impl KeyRole {
@@ -61,6 +72,7 @@ impl KeyRole {
             Self::Shift => "shift",
             Self::Level3 => "level3",
             Self::CapsLock => "caps_lock",
+            Self::Shifted => "shifted",
         }
     }
 }
@@ -97,24 +109,51 @@ impl LabelState {
     }
 }
 
-/// What a character key shows in each label state; empty where it types nothing.
+/// What a character key shows in each label state; empty where it types nothing. An accent is
+/// a label that waits for the next key's letter instead of being typed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct KeyLabels([String; LabelState::COUNT]);
+pub struct KeyLabels {
+    texts: [String; LabelState::COUNT],
+    accents: [bool; LabelState::COUNT],
+}
 
 impl KeyLabels {
-    /// Asks for the label of each state.
+    /// Asks for the label of each state. None of them is an accent until with_accents says so.
     pub fn from_states(mut label: impl FnMut(LabelState) -> String) -> Self {
-        Self(std::array::from_fn(|index| {
-            label(LabelState::from_index(index))
-        }))
+        Self {
+            texts: std::array::from_fn(|index| label(LabelState::from_index(index))),
+            accents: [false; LabelState::COUNT],
+        }
+    }
+
+    /// Asks for each state whether its label is an accent.
+    pub fn with_accents(mut self, mut is_accent: impl FnMut(LabelState) -> bool) -> Self {
+        self.accents = std::array::from_fn(|index| is_accent(LabelState::from_index(index)));
+
+        self
     }
 
     pub fn get(&self, state: LabelState) -> &str {
-        &self.0[state.index()]
+        &self.texts[state.index()]
+    }
+
+    pub fn is_accent(&self, state: LabelState) -> bool {
+        self.accents[state.index()]
+    }
+
+    /// The same labels for a keyboard with no AltGr: the third level's states show the others'.
+    fn without_level3(&self) -> Self {
+        let reached = |state| LabelState {
+            level3: false,
+            ..state
+        };
+
+        Self::from_states(|state| self.get(reached(state)).to_string())
+            .with_accents(|state| self.is_accent(reached(state)))
     }
 
     fn into_vec(self) -> Vec<String> {
-        self.0.into()
+        self.texts.into()
     }
 }
 
@@ -182,6 +221,36 @@ const HOME_ROW: [&str; 11] = [
 const BOTTOM_ROW: [&str; 10] = ["Z", "X", "C", "V", "B", "N", "M", "Comma", "Dot", "Slash"];
 const BACKSLASH: &str = "Backslash";
 
+/// Brackets that belong together. One typed only with Shift gets a key of its own where the
+/// other has one, as accents typed only with Shift do.
+const BRACKET_PAIRS: [(&str, &str); 6] = [
+    ("(", ")"),
+    ("[", "]"),
+    ("{", "}"),
+    ("<", ">"),
+    ("\u{ab}", "\u{bb}"),
+    ("\u{2039}", "\u{203a}"),
+];
+
+/// Names too long for a key that gave up width to the keys beside it, and what it shows then.
+const SHORT_NAMES: [(&str, &str); 1] = [("Backspace", "Bksp")];
+
+/// The width of every row in quarters: fifteen keys of the main block, a gap, and the three
+/// navigation keys.
+const ROW_QUARTERS: u32 = 74;
+
+fn other_bracket(label: &str) -> Option<&'static str> {
+    BRACKET_PAIRS.iter().find_map(|&(opening, closing)| {
+        if label == opening {
+            Some(closing)
+        } else if label == closing {
+            Some(opening)
+        } else {
+            None
+        }
+    })
+}
+
 /// The function keys, in the groups a keyboard spaces them in.
 const FUNCTION_GROUPS: [[&str; 4]; 3] = [
     ["F1", "F2", "F3", "F4"],
@@ -215,6 +284,8 @@ fn named(name: &str, label: &str, width: KeyWidth) -> Option<ViewCell> {
 struct Builder {
     labels: BTreeMap<KeyCode, KeyLabels>,
     right_alt_is_altgr: bool,
+    /// The keys followed by a key for their shifted character.
+    with_own_key: Vec<KeyCode>,
 }
 
 impl Builder {
@@ -227,10 +298,28 @@ impl Builder {
         }))
     }
 
-    fn characters(&self, names: &[&str]) -> Vec<Option<ViewCell>> {
-        let character = |name: &&str| self.character(key_code(name)?);
+    /// The key for a character key's shifted character, where that has a key of its own.
+    fn own_key(&self, code: KeyCode) -> Option<ViewCell> {
+        let shifted = self.labels.get(&code)?.get(LabelState::SHIFTED);
 
-        names.iter().map(character).collect()
+        if !self.with_own_key.contains(&code) {
+            return None;
+        }
+
+        key(code, shifted, KeyWidth::ORDINARY, KeyRole::Shifted)
+    }
+
+    /// A character key, and beside it the key for its shifted character if it has one.
+    fn character_and_own_key(&self, code: KeyCode) -> [Option<ViewCell>; 2] {
+        [self.character(code), self.own_key(code)]
+    }
+
+    fn characters(&self, names: &[&str]) -> Vec<Option<ViewCell>> {
+        let codes = names.iter().filter_map(|name| key_code(name));
+
+        codes
+            .flat_map(|code| self.character_and_own_key(code))
+            .collect()
     }
 
     /// Whether a key that only some keyboards have types, plain or shifted, something that no
@@ -252,6 +341,50 @@ impl Builder {
         typed_by(&extra)
             .iter()
             .any(|label| !label.is_empty() && !elsewhere.contains(label))
+    }
+
+    /// The character keys this keyboard draws, in the order of character_keys.
+    fn drawn_keys(&self) -> Vec<KeyCode> {
+        let is_drawn =
+            |code: &KeyCode| !EXTRA_KEYS.contains(code) || self.extra_key_is_needed(*code);
+
+        character_keys().into_iter().filter(is_drawn).collect()
+    }
+
+    /// The keys whose shifted character is hard to find there and gets a key of its own: an
+    /// accent, or a bracket whose other half has a key. One key for each such character.
+    fn keys_with_own_key(&self) -> Vec<KeyCode> {
+        let drawn = self.drawn_keys();
+        let label =
+            |code: &KeyCode, state| self.labels.get(code).map_or("", |labels| labels.get(state));
+        let unshifted: Vec<&str> = drawn
+            .iter()
+            .map(|code| label(code, LabelState::UNSHIFTED))
+            .collect();
+        let deserves_a_key = |code: &KeyCode| {
+            let shifted = label(code, LabelState::SHIFTED);
+            let is_accent = self
+                .labels
+                .get(code)
+                .is_some_and(|labels| labels.is_accent(LabelState::SHIFTED));
+            let completes_a_pair =
+                other_bracket(shifted).is_some_and(|other| unshifted.contains(&other));
+
+            !shifted.is_empty() && !unshifted.contains(&shifted) && (is_accent || completes_a_pair)
+        };
+        let mut shown: Vec<&str> = Vec::new();
+        let mut codes = Vec::new();
+
+        for code in drawn.iter().filter(|code| deserves_a_key(code)) {
+            let shifted = label(code, LabelState::SHIFTED);
+
+            if !shown.contains(&shifted) {
+                shown.push(shifted);
+                codes.push(*code);
+            }
+        }
+
+        codes
     }
 
     fn function_row(&self) -> Vec<Option<ViewCell>> {
@@ -311,6 +444,7 @@ impl Builder {
 
                 Some(cell)
             }),
+            key_code(BACKSLASH).and_then(|code| self.own_key(code)),
             gap(KeyWidth::BETWEEN_GROUPS),
             named("Delete", "Del", KeyWidth::ORDINARY),
             named("End", "End", KeyWidth::ORDINARY),
@@ -356,13 +490,13 @@ impl Builder {
         let mut row = vec![shift(KeyCode::LEFT_SHIFT, KeyWidth::LEFT_SHIFT, iso_key)];
 
         if iso_key {
-            row.push(self.character(KeyCode::ISO_EXTRA));
+            row.extend(self.character_and_own_key(KeyCode::ISO_EXTRA));
         }
 
         row.extend(self.characters(&BOTTOM_ROW));
 
         if abnt_key {
-            row.push(self.character(KeyCode::ABNT_EXTRA));
+            row.extend(self.character_and_own_key(KeyCode::ABNT_EXTRA));
         }
 
         row.extend([
@@ -407,6 +541,61 @@ impl Builder {
 /// right Shift of ABNT2 ones.
 const EXTRA_KEYS: [KeyCode; 2] = [KeyCode::ISO_EXTRA, KeyCode::ABNT_EXTRA];
 
+fn shorten_name(key: &mut ViewKey) {
+    for label in &mut key.labels {
+        if let Some((_long, short)) = SHORT_NAMES.iter().find(|(long, _short)| label == long) {
+            *label = short.to_string();
+        }
+    }
+}
+
+/// Brings a row back to the width of every row after own keys were added to it. Wide keys
+/// give up what they have beyond an ordinary key, the last one first; where that is not
+/// enough, the last own key is left out.
+fn fit(mut row: Vec<ViewCell>) -> Vec<ViewCell> {
+    let width = |row: &[ViewCell]| -> u32 {
+        row.iter()
+            .map(|cell| u32::from(cell.width().quarters()))
+            .sum()
+    };
+    let spare_of = |cell: &ViewCell| match cell {
+        ViewCell::Key(key) => key.width.spare(),
+        ViewCell::Gap(_) => 0,
+    };
+    let spare =
+        |row: &[ViewCell]| -> u32 { row.iter().map(|cell| u32::from(spare_of(cell))).sum() };
+    let is_own_key =
+        |cell: &ViewCell| matches!(cell, ViewCell::Key(key) if key.role == KeyRole::Shifted);
+
+    while width(&row) > ROW_QUARTERS + spare(&row) {
+        let Some(last_own_key) = row.iter().rposition(is_own_key) else {
+            break;
+        };
+
+        row.remove(last_own_key);
+    }
+
+    let mut excess = width(&row).saturating_sub(ROW_QUARTERS);
+
+    for cell in row.iter_mut().rev() {
+        if let ViewCell::Key(key) = cell {
+            let given = key
+                .width
+                .spare()
+                .min(u8::try_from(excess).unwrap_or(u8::MAX));
+
+            key.width = key.width.less(given);
+            excess -= u32::from(given);
+
+            if given > 0 {
+                shorten_name(key);
+            }
+        }
+    }
+
+    row
+}
+
 /// The keys whose labels come from the layout.
 pub fn character_keys() -> Vec<KeyCode> {
     let rows = [&NUMBER_ROW[..], &TOP_ROW, &HOME_ROW, &BOTTOM_ROW];
@@ -422,14 +611,23 @@ impl KeyboardView {
     /// Lays out the keyboard for one layout. labels_of answers for each of character_keys, and
     /// right_alt_is_altgr says whether Right Alt chooses the third level there.
     pub fn new(mut labels_of: impl FnMut(KeyCode) -> KeyLabels, right_alt_is_altgr: bool) -> Self {
+        // A third level that no key of this keyboard reaches is not offered.
+        let reachable = |labels: KeyLabels| match right_alt_is_altgr {
+            true => labels,
+            false => labels.without_level3(),
+        };
         let labels = character_keys()
             .into_iter()
-            .map(|code| (code, labels_of(code)))
+            .map(|code| (code, reachable(labels_of(code))))
             .collect();
-        let builder = Builder {
+        let mut builder = Builder {
             labels,
             right_alt_is_altgr,
+            with_own_key: Vec::new(),
         };
+
+        builder.with_own_key = builder.keys_with_own_key();
+
         let rows = [
             builder.function_row(),
             builder.number_row(),
@@ -442,7 +640,7 @@ impl KeyboardView {
         Self {
             rows: rows
                 .into_iter()
-                .map(|row| row.into_iter().flatten().collect())
+                .map(|row| fit(row.into_iter().flatten().collect()))
                 .collect(),
         }
     }
@@ -451,9 +649,6 @@ impl KeyboardView {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const MAIN_BLOCK_QUARTERS: u32 = 60;
-    const NAVIGATION_QUARTERS: u32 = 14;
 
     /// A layout that types each key's own code, in upper case with Shift.
     fn code_labels(code: KeyCode) -> KeyLabels {
@@ -500,7 +695,7 @@ mod tests {
 
     #[test]
     fn every_row_is_as_wide_as_the_others() {
-        let expected = vec![MAIN_BLOCK_QUARTERS + NAVIGATION_QUARTERS; 6];
+        let expected = vec![ROW_QUARTERS; 6];
 
         for labels in [
             code_labels as fn(KeyCode) -> KeyLabels,
@@ -512,6 +707,88 @@ mod tests {
                 assert_eq!(row_widths(&view), expected);
             }
         }
+    }
+
+    /// A layout like the Greek one where it matters here: an accent key with another accent
+    /// on Shift, and a bracket key with the closing bracket on Shift.
+    fn accent_and_bracket_labels(code: KeyCode) -> KeyLabels {
+        let pair = |plain: &'static str, shifted: &'static str| {
+            KeyLabels::from_states(move |state| {
+                if state.shift { shifted } else { plain }.to_string()
+            })
+        };
+
+        let is = |name| key_code(name) == Some(code);
+
+        if is("Semicolon") {
+            pair("\u{b4}", "\u{a8}").with_accents(|_state| true)
+        } else if code == KeyCode::ISO_EXTRA {
+            pair("\u{ab}", "\u{bb}")
+        } else if is("Comma") {
+            pair(",", "<")
+        } else if is("Dot") {
+            pair(".", ">")
+        } else {
+            code_labels(code)
+        }
+    }
+
+    fn own_keys(view: &KeyboardView) -> Vec<(KeyCode, Vec<String>)> {
+        keys(view)
+            .into_iter()
+            .filter(|key| key.role == KeyRole::Shifted)
+            .map(|key| (key.key, key.labels.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn a_shifted_accent_and_a_lone_bracket_get_keys_beside_their_own() {
+        let view = KeyboardView::new(accent_and_bracket_labels, false);
+        let semicolon = key_code("Semicolon").unwrap();
+        let drawn: Vec<(KeyCode, KeyRole)> =
+            keys(&view).iter().map(|key| (key.key, key.role)).collect();
+        let follows_its_key = |code| {
+            let own_key = drawn
+                .iter()
+                .position(|key| *key == (code, KeyRole::Shifted));
+
+            own_key.is_some_and(|place| drawn[place - 1] == (code, KeyRole::Plain))
+        };
+
+        assert_eq!(
+            own_keys(&view),
+            vec![
+                (semicolon, vec!["\u{a8}".to_string()]),
+                (KeyCode::ISO_EXTRA, vec!["\u{bb}".to_string()]),
+            ]
+        );
+        assert!(follows_its_key(semicolon) && follows_its_key(KeyCode::ISO_EXTRA));
+        assert_eq!(row_widths(&view), vec![ROW_QUARTERS; 6]);
+    }
+
+    #[test]
+    fn a_row_takes_only_the_own_keys_it_has_room_for() {
+        let accents_on_every_key = |code: KeyCode| {
+            KeyLabels::from_states(|state| format!("{}{}", code.raw(), state.shift))
+                .with_accents(|state| state.shift)
+        };
+        let view = KeyboardView::new(accents_on_every_key, false);
+        let own_keys_in = |row: &Vec<ViewCell>| {
+            let is_own_key = |cell: &&ViewCell| matches!(cell, ViewCell::Key(key) if key.role == KeyRole::Shifted);
+
+            row.iter().filter(is_own_key).count()
+        };
+        let narrowest = keys(&view).iter().map(|key| key.width.quarters()).min();
+
+        assert_eq!(row_widths(&view), vec![ROW_QUARTERS; 6]);
+        assert_eq!(own_keys_in(&view.rows[1]), 1);
+        assert!(keys(&view).iter().any(|key| key.labels == ["Bksp"]));
+        assert_eq!(narrowest, Some(KeyWidth::ORDINARY.quarters()));
+    }
+
+    #[test]
+    fn other_shifted_characters_stay_on_their_keys() {
+        assert_eq!(own_keys(&KeyboardView::new(code_labels, true)), vec![]);
     }
 
     #[test]
@@ -562,6 +839,25 @@ mod tests {
 
         assert_eq!(left_shift(&without), KeyWidth::LEFT_SHIFT);
         assert_eq!(left_shift(&with_extra), KeyWidth::LEFT_SHIFT.less_one_key());
+    }
+
+    #[test]
+    fn the_third_level_is_shown_only_where_right_alt_reaches_it() {
+        let level_labels = |_code| {
+            KeyLabels::from_states(|state| if state.level3 { "3" } else { "1" }.to_string())
+        };
+        let third_level = LabelState {
+            level3: true,
+            ..LabelState::default()
+        };
+        let label = |is_altgr| {
+            let view = KeyboardView::new(level_labels, is_altgr);
+
+            find(&view, KeyCode::A).unwrap().labels[third_level.index()].clone()
+        };
+
+        assert_eq!(label(true), "3");
+        assert_eq!(label(false), "1");
     }
 
     #[test]

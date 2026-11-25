@@ -13,7 +13,7 @@ source "$project_dir/tools/script_common.sh"
 readonly TIMEOUT_SECONDS=180
 readonly DISPLAY_NUMBER=:97
 readonly SCREEN_SIZE=1100x900x24
-readonly LANGUAGES=(en_US pt_BR pt_PT el_GR)
+readonly LANGUAGES=(en_US es_ES pt_BR pt_PT el_GR)
 readonly FALLBACK_LOCALE=C.UTF-8
 readonly GNOME_DESKTOP=ubuntu:GNOME
 readonly CINNAMON_DESKTOP=X-Cinnamon

@@ -4,7 +4,7 @@
 //! Architecture: Thin entry point; window.rs builds everything.
 
 use gtk::prelude::*;
-use keyway_settings::i18n::Language;
+use keyway_settings::i18n::desktop_language;
 use keyway_settings::window::SettingsApp;
 use std::process::ExitCode;
 
@@ -15,7 +15,7 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let app = match SettingsApp::new(Language::from_environment()) {
+    let app = match SettingsApp::new(desktop_language()) {
         Ok(app) => app,
         Err(error) => {
             eprintln!("keyway-settings: {error}");

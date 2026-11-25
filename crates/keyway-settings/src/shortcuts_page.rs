@@ -156,7 +156,7 @@ impl ShortcutsPage {
             let known = catalog.iter().find(|item| item.id == id);
             let title = known.map_or_else(
                 || source.id.clone(),
-                |item| translated_description(&item.description),
+                |item| translated_description(language, &item.description),
             );
             let button = shortcut_button(language, switching.direct.get(&id));
             self.direct

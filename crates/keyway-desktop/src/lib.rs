@@ -11,5 +11,6 @@ pub mod command;
 pub mod config_file;
 pub mod desktop_shell;
 pub mod layout_catalog;
+pub mod layout_names;
 pub mod restart;
 pub mod xkb;

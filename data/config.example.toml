@@ -40,6 +40,11 @@ flags = true
 # "dark".
 theme = "light"
 
+[interface]
+# The language of Keyway's own texts, which its taskbar menu sets: "en", "es", "pt-BR", "el" or
+# "pt-PT". Without it they follow the desktop's language.
+# language = "pt-BR"
+
 [devices]
 # Device names the router must never grab.
 exclude = []

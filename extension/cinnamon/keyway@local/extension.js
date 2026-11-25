@@ -30,17 +30,42 @@ const KEYBOARD_APPLET_UUID = 'keyboard@cinnamon.org';
 const APPLET_RETRY_MILLISECONDS = 1000;
 const APPLET_RETRY_LIMIT = 30;
 const SETTINGS_APP_ID = 'keyway-settings.desktop';
+
+// Keyway's languages by the tags the configuration names them with, each under its own name, in
+// the order the menu offers them. The first serves a desktop in a language that is not here.
+const LANGUAGES = [
+    ['en', 'English'],
+    ['es', 'Español'],
+    ['pt-BR', 'Português (Brasil)'],
+    ['el', 'Ελληνικά'],
+    ['pt-PT', 'Português (Portugal)'],
+];
+const PORTUGUESE = 'pt';
+const PORTUGAL = 'PT';
+const BRAZIL = 'BR';
 const SETTINGS_LABELS = {
-    en: 'Keyway settings',
-    pt: 'Configurações do Keyway',
-    el: 'Ρυθμίσεις Keyway',
+    'en': 'Keyway settings',
+    'es': 'Configuración de Keyway',
+    'pt-BR': 'Configurações do Keyway',
+    'el': 'Ρυθμίσεις Keyway',
+    'pt-PT': 'Definições do Keyway',
 };
 const KEYBOARD_LABELS = {
-    en: 'On-screen keyboard',
-    pt: 'Teclado virtual',
-    el: 'Εικονικό πληκτρολόγιο',
+    'en': 'On-screen keyboard',
+    'es': 'Teclado en pantalla',
+    'pt-BR': 'Teclado virtual',
+    'el': 'Εικονικό πληκτρολόγιο',
+    'pt-PT': 'Teclado virtual',
 };
-const DEFAULT_LABEL_LANGUAGE = 'en';
+const LANGUAGE_LABELS = {
+    'en': 'Language',
+    'es': 'Idioma',
+    'pt-BR': 'Idioma',
+    'el': 'Γλώσσα',
+    'pt-PT': 'Idioma',
+};
+// The class by which a theme shades an open submenu.
+const SUBMENU_SHADE_CLASS = 'popup-sub-menu';
 const INDICATOR_NAME = 'keyway-indicator';
 const LEFT_MOUSE_BUTTON = 1;
 const ENABLED_APPLETS_CHANGED = 'changed::enabled-applets';
@@ -77,12 +102,43 @@ const PLAIN_ROLE = 'plain';
 const SHIFT_ROLE = 'shift';
 const LEVEL3_ROLE = 'level3';
 const CAPS_LOCK_ROLE = 'caps_lock';
+const SHIFTED_ROLE = 'shifted';
 const LATCHING_ROLES = ['modifier', SHIFT_ROLE, LEVEL3_ROLE];
+// After a key of these roles, the modifiers held for it go up.
+const TYPING_ROLES = [PLAIN_ROLE, SHIFTED_ROLE];
+// The Shift that a key of the shifted role holds while it is down: the right one's evdev code.
+const SHIFT_KEY_CODE = 54;
 
 // A character key has a label for each combination of these, at the sum of the active ones.
 const SHIFT_LABELS = 1;
 const LEVEL3_LABELS = 2;
 const CAPS_LOCK_LABELS = 4;
+
+// The modifiers that choose those labels: Shift, and AltGr, which every layout has on Mod5.
+const SHIFT_MASK = Clutter.ModifierType.SHIFT_MASK;
+const LEVEL3_MASK = Clutter.ModifierType.MOD5_MASK;
+const CONTROL_MASK = Clutter.ModifierType.CONTROL_MASK;
+const ALT_MASK = Clutter.ModifierType.MOD1_MASK;
+const SUPER_MASK = Clutter.ModifierType.MOD4_MASK | Clutter.ModifierType.SUPER_MASK;
+// The modifier that each latching key holds, by evdev code. Right Alt holds AltGr instead
+// where it has that role.
+const KEY_MODIFIERS = new Map([[42, SHIFT_MASK], [54, SHIFT_MASK], [29, CONTROL_MASK],
+    [97, CONTROL_MASK], [56, ALT_MASK], [100, ALT_MASK], [125, SUPER_MASK], [126, SUPER_MASK]]);
+
+function modifierOf(key) {
+    return key.role === LEVEL3_ROLE ? LEVEL3_MASK : KEY_MODIFIERS.get(key.code) ?? 0;
+}
+// How often the keyboard looks at them while shown, as an X server tells nobody of a change.
+const MODIFIER_POLL_MS = 100;
+
+// What a key types with one more modifier, shown small in a corner of the key. Nothing for the
+// same letter in the other case, which the key's own label already tells.
+function hintLabel(labels, state, modifier) {
+    const shown = labels[state] ?? '';
+    const other = labels[state ^ modifier] ?? '';
+
+    return other.toUpperCase() === shown.toUpperCase() ? '' : other;
+}
 
 // Flag sizes before the desktop's scale, as Cinnamon's own keyboard applet draws them in its
 // menu, and in the panel until the panel's own icon size is known.
@@ -120,6 +176,13 @@ const INTERFACE_XML = `
     <method name="SetKeyboardTheme">
       <arg type="s" name="theme" direction="in"/>
     </method>
+    <method name="SetLanguage">
+      <arg type="s" name="language" direction="in"/>
+      <arg type="a{ss}" name="layout_names" direction="in"/>
+    </method>
+    <signal name="LanguageChosen">
+      <arg type="s" name="language"/>
+    </signal>
     <signal name="ActiveSourceChanged">
       <arg type="s" name="source_id"/>
     </signal>
@@ -275,12 +338,15 @@ function keyCodeOffset() {
 class KeywayService {
     // The listener's sourcesChanged and activeChanged are called as Cinnamon reports each,
     // flagsChanged when the agent passes on the user's choice, keyboardChanged when it describes
-    // the active layout's keys, and keyboardThemeChanged when it names their colours.
+    // the active layout's keys, keyboardThemeChanged when it names their colours, and
+    // languageChanged when it names the language of the texts.
     constructor(listener) {
         this._listener = listener;
         this.flagsShown = true;
         this.keyboardRows = [];
         [this.keyboardTheme] = KEYBOARD_THEMES;
+        this.language = desktopLanguage();
+        this._layoutNames = {};
         this._keyCodeOffset = keyCodeOffset();
         this._dbus = Gio.DBusExportedObject.wrapJSObject(INTERFACE_XML, this);
         this._layouts = createLayouts(
@@ -363,6 +429,26 @@ class KeywayService {
         this._listener.keyboardThemeChanged();
     }
 
+    // An empty language means the desktop's. The names are those of layouts in the language,
+    // by source id; a layout without one keeps the name the desktop gives it.
+    SetLanguage(language, layoutNames) {
+        if (language && !LANGUAGES.some(([tag]) => tag === language))
+            throw new Error(`Unknown language: ${language}`);
+
+        this.language = language || desktopLanguage();
+        this._layoutNames = layoutNames;
+        this._listener.languageChanged();
+    }
+
+    // Passes the user's choice on to the agent, which saves it and answers with SetLanguage.
+    chooseLanguage(language) {
+        this._dbus.emit_signal('LanguageChosen', new GLib.Variant('(s)', [language]));
+    }
+
+    layoutName(id, displayName) {
+        return this._layoutNames[id] ?? displayName;
+    }
+
     // Presses or releases a key by its evdev code, as a keyboard would; the active layout
     // decides what it types.
     notifyKey(keyCode, pressed) {
@@ -411,12 +497,20 @@ class LayoutLabels {
     }
 }
 
-// Returns a menu label in the first of the desktop's languages that has one.
-function menuLabel(labels) {
-    const languages = GLib.get_language_names().map(name => name.split(/[_.@]/)[0]);
-    const language = languages.find(name => name in labels);
+// Returns the first of the desktop's languages that Keyway has, as one of its tags. Plain
+// Portuguese is Brazil's, as in the settings window.
+function desktopLanguage() {
+    for (const name of GLib.get_language_names()) {
+        const [language, region] = name.split(/[_.@]/);
+        const tag = language === PORTUGUESE
+            ? `${PORTUGUESE}-${region === PORTUGAL ? PORTUGAL : BRAZIL}`
+            : language;
 
-    return labels[language ?? DEFAULT_LABEL_LANGUAGE];
+        if (LANGUAGES.some(([known]) => known === tag))
+            return tag;
+    }
+
+    return LANGUAGES[0][0];
 }
 
 // The keyboard's look, from the file of that name beside this one. Cinnamon would load a file
@@ -516,12 +610,20 @@ class KeyboardViewer {
         this.showTheme();
         this.showLayout();
         this.showKeys();
+
+        this._followed = 0;
+        this._followId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, MODIFIER_POLL_MS, () => {
+            this._followModifiers();
+
+            return GLib.SOURCE_CONTINUE;
+        });
     }
 
     hide() {
         if (!this._panel)
             return;
 
+        GLib.source_remove(this._followId);
         this._releaseAll();
         this._endDrag();
         Main.layoutManager.removeChrome(this._panel);
@@ -561,7 +663,7 @@ class KeyboardViewer {
         const active = this._service.ListSources().find(([id]) => id === activeId);
         const flag = this._service.flagsShown ? this._labels.flag(activeId) : null;
 
-        this._name.text = active?.[2] ?? '';
+        this._name.text = active ? this._service.layoutName(activeId, active[2]) : '';
         this._flag.gicon = flag;
         this._flag.visible = Boolean(flag);
     }
@@ -606,12 +708,22 @@ class KeyboardViewer {
     }
 
     _addKey(key, x, y, width, height) {
-        key.label = new St.Label();
-        key.actor = new St.Bin({style_class: 'keyway-key', reactive: true, track_hover: true,
-            child: key.label});
+        const corner = y_align => new St.Label({style_class: 'keyway-key-hint',
+            x_expand: true, y_expand: true, x_align: Clutter.ActorAlign.END, y_align});
 
-        // A key with one label types nothing that the layout decides.
-        if (key.labels.length === 1)
+        key.label = new St.Label({x_expand: true, y_expand: true,
+            x_align: Clutter.ActorAlign.CENTER, y_align: Clutter.ActorAlign.CENTER});
+        key.shiftHint = corner(Clutter.ActorAlign.START);
+        key.level3Hint = corner(Clutter.ActorAlign.END);
+        key.actor = new St.Widget({style_class: 'keyway-key', reactive: true, track_hover: true,
+            layout_manager: new Clutter.BinLayout()});
+
+        for (const label of [key.label, key.shiftHint, key.level3Hint])
+            key.actor.add_child(label);
+
+        // A key with one label types nothing that the layout decides, unless it is a
+        // character the layout has on Shift.
+        if (key.labels.length === 1 && key.role !== SHIFTED_ROLE)
             key.actor.add_style_class_name('keyway-key-named');
 
         key.actor.set_position(x, y);
@@ -629,21 +741,53 @@ class KeyboardViewer {
         return this._keys.some(key => key.role === role && this._latched.has(key.code));
     }
 
-    // Shows each key's label for the modifiers held here and the desktop's Caps Lock.
+    // The modifiers down on any keyboard, the real one included.
+    _heldModifiers() {
+        const [, , modifiers] = global.get_pointer();
+
+        return modifiers;
+    }
+
+    // Shows the keys again once a modifier went down or up on any keyboard.
+    _followModifiers() {
+        const followed = this._heldModifiers() &
+            (SHIFT_MASK | LEVEL3_MASK | CONTROL_MASK | ALT_MASK | SUPER_MASK);
+
+        if (followed === this._followed)
+            return;
+
+        this._followed = followed;
+        this._showLabels();
+    }
+
+    // Shows each key's label for the modifiers held here or on the real keyboard and for the
+    // desktop's Caps Lock, and lights the modifiers that are held.
     _showLabels() {
         if (!this._panel)
             return;
 
         const capsLock = this._keymap.get_caps_lock_state();
-        const state = (this._isLatched(SHIFT_ROLE) ? SHIFT_LABELS : 0) +
-            (this._isLatched(LEVEL3_ROLE) ? LEVEL3_LABELS : 0) +
+        const modifiers = this._heldModifiers();
+        const shift = this._isLatched(SHIFT_ROLE) || (modifiers & SHIFT_MASK) !== 0;
+        const level3 = this._isLatched(LEVEL3_ROLE) || (modifiers & LEVEL3_MASK) !== 0;
+        const state = (shift ? SHIFT_LABELS : 0) + (level3 ? LEVEL3_LABELS : 0) +
             (capsLock ? CAPS_LOCK_LABELS : 0);
 
         for (const key of this._keys) {
-            key.label.text = key.labels[key.labels.length === 1 ? 0 : state] ?? '';
+            const fixed = key.labels.length === 1;
+
+            key.label.text = key.labels[fixed ? 0 : state] ?? '';
+            key.shiftHint.text = fixed ? '' : hintLabel(key.labels, state, SHIFT_LABELS);
+            key.level3Hint.text = fixed ? '' : hintLabel(key.labels, state, LEVEL3_LABELS);
 
             if (key.role === CAPS_LOCK_ROLE)
                 this._mark(key, 'checked', capsLock);
+
+            // A modifier is lit while it is held, here or on the real keyboard.
+            if (LATCHING_ROLES.includes(key.role)) {
+                this._mark(key, 'checked',
+                    this._latched.has(key.code) || (modifiers & modifierOf(key)) !== 0);
+            }
         }
     }
 
@@ -665,8 +809,15 @@ class KeyboardViewer {
             return Clutter.EVENT_STOP;
         }
 
-        this._held.add(key.code);
+        this._held.add(key);
         this._mark(key, 'active', true);
+
+        // A character from the layout's Shift needs Shift down, unless it already is here.
+        key.holdsShift = key.role === SHIFTED_ROLE && !this._isLatched(SHIFT_ROLE);
+
+        if (key.holdsShift)
+            this._service.notifyKey(SHIFT_KEY_CODE, true);
+
         this._service.notifyKey(key.code, true);
 
         return Clutter.EVENT_STOP;
@@ -674,14 +825,17 @@ class KeyboardViewer {
 
     // Also when the pointer leaves a key, so that no key stays down behind it.
     _release(key) {
-        if (!this._held.delete(key.code))
+        if (!this._held.delete(key))
             return Clutter.EVENT_PROPAGATE;
 
         this._mark(key, 'active', false);
         this._service.notifyKey(key.code, false);
 
+        if (key.holdsShift)
+            this._service.notifyKey(SHIFT_KEY_CODE, false);
+
         // The modifiers held for this key have done their work.
-        if (key.role === PLAIN_ROLE)
+        if (TYPING_ROLES.includes(key.role))
             this._releaseLatched();
 
         return Clutter.EVENT_STOP;
@@ -768,7 +922,8 @@ class KeyboardViewer {
 }
 
 // The layout switcher in the panel: the active layout's flag and label, such as PT-BR, and a
-// menu of the layouts by their full names, the on-screen keyboard and the settings window.
+// menu of the layouts by their full names, the on-screen keyboard, the languages of Keyway's
+// texts and the settings window.
 class KeywayIndicator {
     constructor(service, labels, viewer) {
         this._service = service;
@@ -799,9 +954,26 @@ class KeywayIndicator {
         this._layoutSection = new PopupMenu.PopupMenuSection();
         this.menu.addMenuItem(this._layoutSection);
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        this.menu.addAction(menuLabel(KEYBOARD_LABELS), () => viewer.toggle());
-        this.menu.addAction(menuLabel(SETTINGS_LABELS),
+        this._keyboardItem = this.menu.addAction('', () => viewer.toggle());
+        this._languagesItem = new PopupMenu.PopupSubMenuMenuItem('');
+        // Without the shade a theme gives an open submenu: the languages look like the menu's
+        // other items.
+        this._languagesItem.menu.actor.remove_style_class_name(SUBMENU_SHADE_CLASS);
+        this.menu.addMenuItem(this._languagesItem);
+        this._settingsItem = this.menu.addAction('',
             () => CinnamonApps.AppSystem.get_default().lookup_app(SETTINGS_APP_ID)?.activate());
+
+        this._languageItems = new Map();
+
+        for (const [tag, name] of LANGUAGES) {
+            const item = new PopupMenu.PopupMenuItem(name);
+
+            item.connect('activate', () => service.chooseLanguage(tag));
+            this._languagesItem.menu.addMenuItem(item);
+            this._languageItems.set(tag, item);
+        }
+
+        this._showMenuTexts();
 
         this.actor.connect('button-press-event', (_actor, event) => {
             if (event.get_button() !== LEFT_MOUSE_BUTTON)
@@ -828,6 +1000,23 @@ class KeywayIndicator {
         this._flag.icon_size = applet.getPanelIconSize(St.IconType.SYMBOLIC) ?? this._flag.icon_size;
     }
 
+    _showMenuTexts() {
+        const language = this._service.language;
+
+        this._keyboardItem.label.text = KEYBOARD_LABELS[language];
+        this._languagesItem.label.text = LANGUAGE_LABELS[language];
+        this._settingsItem.label.text = SETTINGS_LABELS[language];
+
+        for (const [tag, item] of this._languageItems)
+            item.setShowDot(tag === language);
+    }
+
+    // Puts the menu's own texts and the layouts' names in the language Keyway uses.
+    showLanguage() {
+        this._showMenuTexts();
+        this.showLayouts();
+    }
+
     showLayouts() {
         this._layoutSection.removeAll();
         this._items.clear();
@@ -838,6 +1027,7 @@ class KeywayIndicator {
             const text = this._labels.text(id, shortName);
             const flag = flagsShown ? this._labels.flag(id) : null;
             const item = new PopupMenu.PopupBaseMenuItem();
+            const layoutName = this._service.layoutName(id, displayName);
 
             // One column for flag and name, because the menu sizes each column to its widest
             // item, settings included. A layout without a flag keeps the space, so names line up.
@@ -848,7 +1038,7 @@ class KeywayIndicator {
                     icon_size: Math.round(MENU_FLAG_SIZE * global.ui_scale)}));
             }
 
-            name.add_child(new St.Label({text: displayName, y_align: Clutter.ActorAlign.CENTER}));
+            name.add_child(new St.Label({text: layoutName, y_align: Clutter.ActorAlign.CENTER}));
             item.addActor(name);
             item.connect('activate', () => this._service.Activate(id));
 
@@ -988,6 +1178,10 @@ function enable() {
         },
         keyboardChanged: () => viewer?.showKeys(),
         keyboardThemeChanged: () => viewer?.showTheme(),
+        languageChanged: () => {
+            indicator?.showLanguage();
+            viewer?.showLayout();
+        },
     });
     const labels = new LayoutLabels();
 

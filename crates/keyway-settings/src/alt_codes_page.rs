@@ -130,6 +130,7 @@ impl AltCodesPage {
     /// Replaces the code page rows, one per listed XKB layout.
     pub fn show_code_pages(
         &self,
+        language: Language,
         sources: &[SourceEntry],
         config: &AltCodesConfig,
         layout_pages: &LayoutCodePages,
@@ -149,7 +150,7 @@ impl AltCodesPage {
             let known = layout_catalog.iter().find(|item| item.id == id);
             let title = known.map_or_else(
                 || source.id.clone(),
-                |item| translated_description(&item.description),
+                |item| translated_description(language, &item.description),
             );
             let page_numbers = format!(
                 "OEM {} · ANSI {}",

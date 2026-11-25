@@ -8,7 +8,7 @@ use gtk::prelude::*;
 use gtk::{gdk, glib};
 use keyway_core::hotkey::Chord;
 use keyway_desktop::restart::looking_glass_line;
-use keyway_settings::i18n::{Language, Message, text};
+use keyway_settings::i18n::{Language, Message, desktop_language, text};
 use keyway_settings::shortcuts_page::ShortcutSlot;
 use keyway_settings::source_list::SourceEntry;
 use keyway_settings::window::{PAGE_ALT_CODES, PAGE_SHORTCUTS, SettingsApp};
@@ -703,7 +703,7 @@ fn test_restart(app: &Rc<SettingsApp>) {
 fn test_invalid_config(config_path: &Path) {
     std::fs::write(config_path, "this is not valid\n").unwrap();
 
-    let app = SettingsApp::new(Language::from_environment()).unwrap();
+    let app = SettingsApp::new(desktop_language()).unwrap();
     app.window.show_all();
     settle();
     check("an invalid file is reported", app.banner.is_visible());
@@ -725,6 +725,45 @@ fn test_invalid_config(config_path: &Path) {
     settle();
 }
 
+/// The taskbar menu saves a language, which wins over the desktop's and survives a change made
+/// in a window that was already open.
+fn test_saved_language(config_path: &Path) {
+    let [saved, later] = if desktop_language() == Language::Greek {
+        [Language::Spanish, Language::English]
+    } else {
+        [Language::Greek, Language::Spanish]
+    };
+    let file_with =
+        |language: Language| format!("[interface]\nlanguage = \"{}\"\n", language.tag());
+
+    std::fs::write(config_path, file_with(saved)).unwrap();
+
+    let app = SettingsApp::new(desktop_language()).unwrap();
+    app.window.show_all();
+    settle();
+    check(
+        "a saved language wins over the desktop's",
+        app.language == saved
+            && app.use_only_keyway.label().as_deref() == Some(text(saved, Message::UseOnlyKeyway)),
+    );
+    save_screenshot(&app.window, "saved_language");
+
+    std::fs::write(config_path, file_with(later)).unwrap();
+    app.stack.set_visible_child_name(PAGE_ALT_CODES);
+    settle();
+    click(&app.alt_codes.hex_numpad);
+    wait_until("a change here keeps a language saved meanwhile", || {
+        keyway_desktop::config_file::load_config(config_path).is_ok_and(|config| {
+            config.alt_codes.hex_numpad
+                != keyway_core::config::Config::default().alt_codes.hex_numpad
+                && config.interface.language == Some(later)
+        })
+    });
+
+    app.window.close();
+    settle();
+}
+
 fn main() {
     let is_isolated = env::var_os(GUARD_VARIABLE).is_some()
         && env::var("GSETTINGS_BACKEND").as_deref() == Ok("keyfile");
@@ -741,7 +780,7 @@ fn main() {
 
     let config_directory = keyway_desktop::config_file::config_directory().unwrap();
     let config_path = config_directory.join(keyway_desktop::config_file::CONFIG_FILE_NAME);
-    let app = SettingsApp::new(Language::from_environment()).unwrap();
+    let app = SettingsApp::new(desktop_language()).unwrap();
 
     app.window.show_all();
     check(
@@ -759,6 +798,7 @@ fn main() {
     app.window.close();
     settle();
 
+    test_saved_language(&config_path);
     test_invalid_config(&config_path);
 
     println!("ALL SETTINGS TESTS PASSED");

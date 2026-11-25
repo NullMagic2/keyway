@@ -111,6 +111,7 @@ keyway/
 |   |   |   |-- key_codes.rs        Key code, key event and modifier types
 |   |   |   |-- key_interpreter.rs  One decision per key from both state machines
 |   |   |   |-- keyboard_view.rs    Rows, widths and roles of the on-screen keyboard's keys
+|   |   |   |-- language.rs         The languages of Keyway's own texts and their tags
 |   |   |   |-- layout_id.rs        Validated input source identifier
 |   |   |   |-- layout_labels.rs    Taskbar code and flag for each layout
 |   |   |   `-- protocol.rs         Router and agent socket messages
@@ -138,6 +139,7 @@ keyway/
 |   |       |-- config_file.rs      Find, load and atomically save the configuration
 |   |       |-- desktop_shell.rs    D-Bus client for the desktop extensions
 |   |       |-- layout_catalog.rs   Read layouts and variants from evdev.xml
+|   |       |-- layout_names.rs     Layout names in a chosen language, from the system's catalogs
 |   |       |-- restart.rs          Restart the extension, the agent and the router
 |   |       `-- xkb.rs              Only unsafe code here: a layout's key labels and its AltGr
 |   |-- keyway/                     User agent and command line tool
@@ -163,7 +165,7 @@ keyway/
 |       |   |-- input_sources.rs    Each desktop's layout list and shortcuts in GSettings
 |       |   |-- source_list.rs      Rules for editing that list, with no I/O
 |       |   |-- system_shortcuts.rs Recognizes the system's modifier-only shortcuts, with no I/O
-|       |   |-- i18n.rs             English, Portuguese and Greek interface text
+|       |   |-- i18n.rs             English, Spanish, Portuguese and Greek interface text
 |       |   |-- widgets.rs          Shared building blocks for the pages
 |       |   `-- style.css           Card layout over the system theme's colors
 |       `-- tests/

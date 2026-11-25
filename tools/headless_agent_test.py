@@ -118,6 +118,17 @@ def wait_until(description, condition):
     check(description, False, "timed out")
 
 
+def wait_quietly(condition):
+    """Waits for a step that only makes the next one safe, and reports it only when it fails."""
+    deadline = time.monotonic() + WAIT_LIMIT_SECONDS
+
+    while not condition():
+        if time.monotonic() > deadline:
+            check("a step the test waits for", False, "timed out")
+
+        time.sleep(RETRY_SECONDS)
+
+
 def run_quietly(*arguments):
     return subprocess.run(arguments, capture_output=True, text=True, check=False)
 
@@ -191,6 +202,10 @@ class GnomeDesktop:
     def keep_above_others(self, title):
         desktop_eval(SHELL_LIFT_WINDOW % title)
 
+    def hold_key(self, name, held):
+        """Presses or releases a key on a keyboard other than the on-screen one's."""
+        desktop_eval(SHELL_KEYS % f"['KEY_{name}', {int(held)}]")
+
 
 class CinnamonDesktop:
     """Cinnamon 6.4 and older on a private X server, whose daemon applies the layouts."""
@@ -254,6 +269,10 @@ class CinnamonDesktop:
         button = [] if pressed is None else ["mousedown" if pressed else "mouseup", "1"]
 
         run_quietly("xdotool", "mousemove", str(x), str(y), *button)
+
+    def hold_key(self, name, held):
+        """Presses or releases a key as a real keyboard does."""
+        run_quietly("xdotool", "keydown" if held else "keyup", name)
 
     def keep_above_others(self, _title):
         """An X window asks for this itself, and the window manager grants it."""
@@ -562,11 +581,17 @@ def test_taskbar_menu_opens_the_settings_window():
 # Evdev codes of the keys the on-screen keyboard test clicks, and its menu entry.
 KEY_1 = 2
 KEY_Q = 16
+KEY_I = 23
+KEY_RIGHT_OF_P = 26
 KEY_A = 30
+KEY_SEMICOLON = 39
 KEY_LEFT_SHIFT = 42
+KEY_LEFT_ALT = 56
 KEY_CAPS_LOCK = 58
+KEY_102ND = 86
 KEY_ABNT_EXTRA = 89
 KEY_RIGHT_ALT = 100
+LATCHING_KEYS = (KEY_LEFT_SHIFT, KEY_RIGHT_ALT)
 KEYBOARD_MENU_LABEL = "On-screen keyboard"
 DRAG_DISTANCE = (60, -40)
 
@@ -580,7 +605,14 @@ def keyboard_is_shown():
 
 
 def keyboard_key(code):
-    return f"{keyboard()}._keys.find(key => key.code === {code})"
+    """The key a keyboard has at this code, not one that types its shifted character."""
+    return f"{keyboard()}._keys.find(key => key.code === {code} && key.role !== 'shifted')"
+
+
+def own_key(text):
+    """The key that types this character, which the layout itself has on Shift."""
+    return (f"{keyboard()}._keys.find(key => key.role === 'shifted'"
+            f" && key.label.text === {json.dumps(text)})")
 
 
 def key_shows(code, text):
@@ -588,9 +620,23 @@ def key_shows(code, text):
     return '"true"' in desktop_eval(f"String({keyboard_key(code)}?.label.text === {json.dumps(text)})")
 
 
-def key_is_marked(code, pseudo_class):
+def key_hints(code, shift, level3=None):
+    """True when the key's corners show these characters. No level3 leaves that corner unchecked."""
+    wanted = f"key.shiftHint.text === {json.dumps(shift)}"
+
+    if level3 is not None:
+        wanted += f" && key.level3Hint.text === {json.dumps(level3)}"
+
+    return '"true"' in desktop_eval(f"String((key => {wanted})({keyboard_key(code)}))")
+
+
+def is_marked(key, pseudo_class):
     return '"true"' in desktop_eval(
-        f"String({keyboard_key(code)}.actor.has_style_pseudo_class('{pseudo_class}'))")
+        f"String(!!{key}?.actor.has_style_pseudo_class('{pseudo_class}'))")
+
+
+def key_is_marked(code, pseudo_class):
+    return is_marked(keyboard_key(code), pseudo_class)
 
 
 def centre_of(actor):
@@ -612,8 +658,18 @@ def click(actor):
     desktop.pointer(x, y, pressed=False)
 
 
+def click_and_see(key, stays_down=False):
+    """Sees a key go down and up, as clicks sent in a row can otherwise all reach one key."""
+    x, y = centre_of(f"{key}.actor")
+
+    desktop.pointer(x, y, pressed=True)
+    wait_quietly(lambda: stays_down or is_marked(key, "active"))
+    desktop.pointer(x, y, pressed=False)
+    wait_quietly(lambda: stays_down or not is_marked(key, "active"))
+
+
 def click_key(code):
-    click(f"{keyboard_key(code)}.actor")
+    click_and_see(keyboard_key(code), stays_down=code in LATCHING_KEYS)
 
 
 def keyboard_position():
@@ -651,6 +707,29 @@ def test_on_screen_keyboard(router, window_script, config_path):
           "Portuguese (Brazil)" in desktop_eval(f"{keyboard()}._name.text"),
           desktop_eval(f"{keyboard()}._name.text"))
     check("the ABNT2 key is drawn where the layout uses it", key_shows(KEY_ABNT_EXTRA, "/"))
+    check("a key's corners show what Shift and AltGr type on it",
+          key_hints(KEY_1, "!", "\u00b9"))
+    check("with no corner for a letter's capital", key_hints(KEY_Q, "", "/"))
+    check("the accents that the layout has on Shift have keys of their own",
+          '"true"' in desktop_eval(f"String(!!{own_key('`')} && !!{own_key('^')})"))
+
+    desktop.hold_key("Shift_L", True)
+    wait_until("Shift held on the real keyboard shows the capitals too",
+               lambda: key_shows(KEY_Q, "Q"))
+    check("and lights the Shift key", key_is_marked(KEY_LEFT_SHIFT, "checked"))
+    desktop.hold_key("Shift_L", False)
+    wait_until("until it is let go",
+               lambda: key_shows(KEY_Q, "q") and not key_is_marked(KEY_LEFT_SHIFT, "checked"))
+    desktop.hold_key("ISO_Level3_Shift", True)
+    wait_until("AltGr held there shows the third level and lights AltGr",
+               lambda: key_shows(KEY_1, "\u00b9") and key_is_marked(KEY_RIGHT_ALT, "checked"))
+    desktop.hold_key("ISO_Level3_Shift", False)
+    wait_until("until it is let go too",
+               lambda: key_shows(KEY_1, "1") and not key_is_marked(KEY_RIGHT_ALT, "checked"))
+    desktop.hold_key("Alt_L", True)
+    wait_until("and Alt held there lights Alt", lambda: key_is_marked(KEY_LEFT_ALT, "checked"))
+    desktop.hold_key("Alt_L", False)
+    wait_until("for as long as it is held", lambda: not key_is_marked(KEY_LEFT_ALT, "checked"))
     check("showing it leaves the window focused", window_has_focus())
     check("it is light unless the user chose otherwise", keyboard_has_theme("light"))
     save_screenshot("keyboard.png")
@@ -662,6 +741,8 @@ def test_on_screen_keyboard(router, window_script, config_path):
     click_key(KEY_LEFT_SHIFT)
     wait_until("Shift stays down and the keys show capitals", lambda: key_shows(KEY_Q, "Q"))
     check("Shift is marked as held", key_is_marked(KEY_LEFT_SHIFT, "checked"))
+    check("and the corner then shows the character without it",
+          key_shows(KEY_1, "!") and key_hints(KEY_1, "1"))
     save_screenshot("keyboard-shift.png")
     click_key(KEY_Q)
     wait_until("the next key is typed shifted", typed("qQ"))
@@ -671,6 +752,12 @@ def test_on_screen_keyboard(router, window_script, config_path):
     wait_until("AltGr shows the third level", lambda: key_shows(KEY_1, "\u00b9"))
     click_key(KEY_1)
     wait_until("and types it", typed("qQ\u00b9"))
+
+    check("an accent key shows its accent", key_shows(KEY_RIGHT_OF_P, "\u00b4"))
+    click_key(KEY_RIGHT_OF_P)
+    click_key(KEY_A)
+    wait_until("an accent key and then a letter type the accented letter",
+               typed("qQ\u00b9\u00e1"))
 
     click_key(KEY_CAPS_LOCK)
     wait_until("Caps Lock shows capitals while it is on", lambda: key_shows(KEY_Q, "Q"))
@@ -685,7 +772,33 @@ def test_on_screen_keyboard(router, window_script, config_path):
     check("the ABNT2 key goes where the layout has nothing on it",
           '"false"' in desktop_eval(f"String(!!{keyboard_key(KEY_ABNT_EXTRA)})"))
     click_key(KEY_A)
-    wait_until("a clicked key types the Greek letter", typed("qQ\u00b9\u03b1"))
+    wait_until("a clicked key types the Greek letter", typed("qQ\u00b9\u00e1\u03b1"))
+    check("the Greek accent key shows its diaeresis in the corner",
+          key_shows(KEY_SEMICOLON, "\u00b4") and key_hints(KEY_SEMICOLON, "\u00a8", ""))
+    check("and the bracket key its closing bracket",
+          key_shows(KEY_102ND, "\u00ab") and key_hints(KEY_102ND, "\u00bb", ""))
+    check("while a Greek letter shows only itself", key_hints(KEY_A, "", ""))
+    click_key(KEY_LEFT_SHIFT)
+    wait_until("Shift shows the Greek diaeresis", lambda: key_shows(KEY_SEMICOLON, "\u00a8"))
+    click_key(KEY_SEMICOLON)
+    click_key(KEY_I)
+    wait_until("which goes on the next letter",
+               typed("qQ\u00b9\u00e1\u03b1\u03ca"))
+    wait_until("and Shift is up again", lambda: key_shows(KEY_SEMICOLON, "\u00b4"))
+
+    check("the closing bracket and the diaeresis have keys of their own in Greek",
+          '"true"' in desktop_eval(
+              f"String(!!{own_key(chr(0xbb))} && !!{own_key(chr(0xa8))})"))
+    click_and_see(own_key("\u00bb"))
+    wait_until("the bracket's key types it without Shift",
+               typed("qQ\u00b9\u00e1\u03b1\u03ca\u00bb"))
+    click_and_see(own_key("\u00a8"))
+    click_key(KEY_I)
+    wait_until("and the diaeresis from its key goes on the next letter",
+               typed("qQ\u00b9\u00e1\u03b1\u03ca\u00bb\u03ca"))
+    click_key(KEY_A)
+    wait_until("after which keys are unshifted as before",
+               typed("qQ\u00b9\u00e1\u03b1\u03ca\u00bb\u03ca\u03b1"))
     save_screenshot("keyboard-greek.png")
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -817,6 +930,93 @@ def test_screenshot_tools_cover_the_keyboard(window_script):
 
     wait_until("once it is gone the keyboard takes clicks again, on its close button",
                close_button_hides_it)
+
+
+# Keyway's languages as the taskbar menu offers them, and its texts in those the test chooses.
+LANGUAGE_NAMES = ["English", "Espa\u00f1ol", "Portugu\u00eas (Brasil)",
+                  "\u0395\u03bb\u03bb\u03b7\u03bd\u03b9\u03ba\u03ac", "Portugu\u00eas (Portugal)"]
+LANGUAGE_MENU_LABEL = "Language"
+GREEK_MENU_LABELS = ["\u0395\u03b9\u03ba\u03bf\u03bd\u03b9\u03ba\u03cc"
+                     " \u03c0\u03bb\u03b7\u03ba\u03c4\u03c1\u03bf\u03bb\u03cc\u03b3\u03b9\u03bf",
+                     "\u0393\u03bb\u03ce\u03c3\u03c3\u03b1",
+                     "\u03a1\u03c5\u03b8\u03bc\u03af\u03c3\u03b5\u03b9\u03c2 Keyway"]
+BRAZILIAN_MENU_LABELS = ["Teclado virtual", "Idioma", "Configura\u00e7\u00f5es do Keyway"]
+ENGLISH_MENU_LABELS = [KEYBOARD_MENU_LABEL, LANGUAGE_MENU_LABEL, "Keyway settings"]
+BRAZILIAN_LAYOUT_NAMES = Path("/usr/share/locale-langpack/pt_BR/LC_MESSAGES/xkeyboard-config.mo")
+BRAZILIAN_NAME_OF_BR = "Portugu\u00eas (Brasil)"
+
+
+def compact_json(value):
+    """Writes a value as the desktop's JSON.stringify does, in ASCII."""
+    return json.dumps(value, separators=(",", ":"))
+
+
+def menu_shows(labels):
+    """True when the menu's own entries read exactly so. The texts travel as ASCII literals."""
+    shown = (f"{desktop.indicator}.menu._getMenuItems()"
+             ".map(item => item.label?.text).filter(Boolean)")
+
+    return '"true"' in desktop_eval(f"String(JSON.stringify({shown}) === '{compact_json(labels)}')")
+
+
+def keyway_language():
+    return desktop_eval(f"{desktop.indicator}._service.language")
+
+
+def choose_language(tag):
+    desktop_eval(f"{desktop.indicator}._languageItems.get('{tag}').activate(null)")
+
+
+def test_language_menu(router, config_path):
+    """The menu's languages: a choice is saved by the agent and comes back as the menu's texts."""
+    def saved(tag):
+        return lambda: (config_path.exists()
+                        and f'language = "{tag}"' in config_path.read_text())
+
+    wait_until("the taskbar menu offers Keyway's languages",
+               lambda: menu_shows(ENGLISH_MENU_LABELS))
+    check("each under its own name",
+          '"true"' in desktop_eval(
+              f"String(JSON.stringify({desktop.indicator}._languagesItem.menu._getMenuItems()"
+              f".map(item => item.label.text)) === '{compact_json(LANGUAGE_NAMES)}')"))
+    check("and follows the desktop's until one is chosen", '"en"' in keyway_language(),
+          keyway_language())
+
+    choose_language("el")
+    wait_until("choosing Greek saves it in the configuration file", saved("el"))
+    wait_until("and puts the menu in Greek", lambda: menu_shows(GREEK_MENU_LABELS))
+    check("with Greek as the language in use", '"el"' in keyway_language())
+    router.next_configuration()
+
+    desktop_eval(f"{desktop.indicator}.menu.open(); {desktop.indicator}._languagesItem.menu.open()")
+    check("the open list of languages is not shaded, nor its title",
+          '"true"' in desktop_eval(
+              f"(item => String(!item.menu.actor.has_style_class_name('popup-sub-menu')"
+              " && !(item.actor ?? item).has_style_pseudo_class('checked')))"
+              f"({desktop.indicator}._languagesItem)"))
+    save_screenshot("language-menu.png")
+    desktop_eval(f"{desktop.indicator}.menu.close()")
+
+    choose_language("pt-BR")
+    wait_until("choosing another replaces it", saved("pt-BR"))
+    wait_until("in the menu too", lambda: menu_shows(BRAZILIAN_MENU_LABELS))
+    router.next_configuration()
+
+    if BRAZILIAN_LAYOUT_NAMES.exists():
+        wait_until("layouts are named in the chosen language, not the desktop's",
+                   lambda: '"true"' in desktop_eval(
+                       f"String({desktop.indicator}._service.layoutName('br', '')"
+                       f" === {json.dumps(BRAZILIAN_NAME_OF_BR)})"))
+    else:
+        print("skip layouts named in the chosen language: this system lacks its translations",
+              flush=True)
+
+    config_path.unlink()
+    wait_until("without a saved language the menu follows the desktop again",
+               lambda: menu_shows(ENGLISH_MENU_LABELS) and '"en"' in keyway_language())
+    check("and layouts keep the desktop's names",
+          '"desktop"' in desktop_eval(f"{desktop.indicator}._service.layoutName('br', 'desktop')"))
+    router.next_configuration()
 
 
 def test_shortcuts_switch_layouts(router):
@@ -1286,6 +1486,7 @@ def main():
                 test_on_screen_keyboard_by_touch(window_script)
 
             test_screenshot_tools_cover_the_keyboard(window_script)
+            test_language_menu(router, config_path)
             test_shortcuts_switch_layouts(router)
 
             if isinstance(desktop, GnomeDesktop):

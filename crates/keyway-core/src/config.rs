@@ -7,6 +7,7 @@
 use crate::alt_code::{AltCodeRules, NumLockPolicy};
 use crate::code_pages::CodePagePair;
 use crate::hotkey::{Chord, ShortcutAction, ShortcutBinding};
+use crate::language::Language;
 use crate::layout_id::LayoutId;
 use crate::protocol::RouterConfig;
 use serde::{Deserialize, Serialize};
@@ -14,8 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 pub const MAX_CONFIG_BYTES: usize = 64 * 1024;
-const WRITTEN_FILE_HEADER: &str =
-    "# Written by Keyway settings. All options: config.example.toml\n\n";
+const WRITTEN_FILE_HEADER: &str = "# Written by Keyway. All options: config.example.toml\n\n";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -24,6 +24,7 @@ pub struct Config {
     pub alt_codes: AltCodesConfig,
     pub indicator: IndicatorConfig,
     pub keyboard: KeyboardConfig,
+    pub interface: InterfaceConfig,
     pub devices: DevicesConfig,
 }
 
@@ -131,6 +132,14 @@ pub struct KeyboardConfig {
     pub theme: KeyboardTheme,
 }
 
+/// Keyway's own texts. Without a language they follow the desktop's.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct InterfaceConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<Language>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DevicesConfig {
@@ -192,7 +201,7 @@ impl Config {
         Ok(())
     }
 
-    /// Renders the file the settings window saves; parsing it gives this configuration back.
+    /// Renders the file Keyway saves; parsing it gives this configuration back.
     pub fn to_toml(&self) -> Result<String, ConfigError> {
         let body = toml::to_string(self).map_err(|error| ConfigError::Syntax(error.to_string()))?;
 
@@ -294,6 +303,7 @@ mod tests {
 
         assert!(is_syntax_error("unknown_option = true"));
         assert!(is_syntax_error("[keyboard]\ntheme = \"sepia\""));
+        assert!(is_syntax_error("[interface]\nlanguage = \"pt\""));
         assert!(is_syntax_error("[switching]\nnext = \"Alt\""));
         assert!(is_syntax_error(
             "[alt_codes.code_pages]\nbr = { oem = 932, ansi = 1252 }"
@@ -334,6 +344,9 @@ mod tests {
             [keyboard]
             theme = "dark"
 
+            [interface]
+            language = "pt-PT"
+
             [devices]
             exclude = ["Macro pad"]
         "#;
@@ -342,6 +355,11 @@ mod tests {
 
         assert_eq!(config.keyboard.theme, KeyboardTheme::Dark);
         assert_eq!(defaults.keyboard.theme, KeyboardTheme::Light);
+        assert_eq!(
+            config.interface.language,
+            Some(Language::EuropeanPortuguese)
+        );
+        assert_eq!(defaults.interface.language, None);
         assert_eq!(Config::parse(&config.to_toml().unwrap()).unwrap(), config);
         assert_eq!(
             Config::parse(&defaults.to_toml().unwrap()).unwrap(),

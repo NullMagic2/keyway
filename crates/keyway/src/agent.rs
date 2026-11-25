@@ -9,6 +9,7 @@ use keyway_core::code_pages::{CodePageCatalog, LayoutCodePages};
 use keyway_core::config::{Config, KeyboardTheme, SwitchOrder};
 use keyway_core::hotkey::ShortcutAction;
 use keyway_core::keyboard_view::KeyboardView;
+use keyway_core::language::Language;
 use keyway_core::layout_id::LayoutId;
 use keyway_core::protocol::{AgentMessage, PROTOCOL_VERSION, RouterMessage};
 use keyway_desktop::desktop_shell::{DesktopSnapshot, InputSource};
@@ -21,6 +22,8 @@ pub enum AgentAction {
     ShowFlags(bool),
     SetKeyboard(KeyboardView),
     SetKeyboardTheme(KeyboardTheme),
+    /// The language of the extension's texts, None for the desktop's, with layout names in it.
+    SetLanguage(Option<Language>),
     Send(AgentMessage),
     DropRouter,
 }
@@ -75,9 +78,21 @@ impl Agent {
         self.desktop.is_some()
     }
 
+    pub const fn config(&self) -> &Config {
+        &self.config
+    }
+
+    /// The desktop's layouts, none while it is unavailable.
+    pub fn sources(&self) -> &[InputSource] {
+        self.desktop
+            .as_ref()
+            .map_or(&[], |desktop| desktop.sources.as_slice())
+    }
+
     pub fn config_changed(&mut self, config: Config) -> Vec<AgentAction> {
         let flags_changed = config.indicator.flags != self.config.indicator.flags;
         let theme_changed = config.keyboard.theme != self.config.keyboard.theme;
+        let language_changed = config.interface.language != self.config.interface.language;
         let mut actions = Vec::new();
 
         self.config = config;
@@ -90,6 +105,10 @@ impl Agent {
             actions.push(AgentAction::SetKeyboardTheme(self.config.keyboard.theme));
         }
 
+        if language_changed && self.desktop_available() {
+            actions.push(AgentAction::SetLanguage(self.config.interface.language));
+        }
+
         if self.router_ready {
             actions.push(self.configure_message());
         }
@@ -97,11 +116,17 @@ impl Agent {
         actions
     }
 
-    /// Records a new desktop state. A newly started extension learns the flag choice and the
-    /// keyboard's colours, the extension learns the keyboard of a layout it has not drawn, and
-    /// the router learns if Right Alt's role changed.
+    /// Records a new desktop state. A newly started extension learns the flag choice, the
+    /// keyboard's colours and the language, the extension learns the keyboard of a layout it
+    /// has not drawn and the names of layouts it has not shown in a chosen language, and the
+    /// router learns if Right Alt's role changed.
     pub fn desktop_changed(&mut self, snapshot: DesktopSnapshot) -> Vec<AgentAction> {
         let mut actions = Vec::new();
+        let language = self.config.interface.language;
+        let layouts_named = self
+            .desktop
+            .as_ref()
+            .is_some_and(|old| language.is_none() || old.sources == snapshot.sources);
 
         if !self.desktop_available() {
             actions.push(AgentAction::ShowFlags(self.config.indicator.flags));
@@ -129,6 +154,11 @@ impl Agent {
 
         let allow_right_alt = !snapshot.right_alt_is_altgr;
         self.desktop = Some(snapshot);
+
+        // After the snapshot is kept, as the names are those of its layouts.
+        if !layouts_named {
+            actions.push(AgentAction::SetLanguage(language));
+        }
 
         if altgr_changed && self.router_ready {
             actions.push(AgentAction::Send(AgentMessage::SetAllowRightAlt(
@@ -654,7 +684,8 @@ mod tests {
             [
                 AgentAction::ShowFlags(false),
                 AgentAction::SetKeyboardTheme(KeyboardTheme::Light),
-                set_keyboard("br")
+                set_keyboard("br"),
+                AgentAction::SetLanguage(None)
             ]
         );
         assert_eq!(agent.desktop_changed(snapshot(&["br"], "br", true)), []);
@@ -671,7 +702,8 @@ mod tests {
             [
                 AgentAction::ShowFlags(false),
                 AgentAction::SetKeyboardTheme(KeyboardTheme::Light),
-                set_keyboard("br")
+                set_keyboard("br"),
+                AgentAction::SetLanguage(None)
             ]
         );
     }
@@ -690,6 +722,30 @@ mod tests {
         agent.desktop_lost();
 
         assert_eq!(agent.config_changed(Config::default()), []);
+    }
+
+    #[test]
+    fn the_extension_learns_the_language_and_the_names_of_new_layouts_in_it() {
+        let mut agent = agent_with("");
+        let greek = Config::parse("[interface]\nlanguage = \"el\"").unwrap();
+        let set_greek = AgentAction::SetLanguage(Some(Language::Greek));
+
+        assert_eq!(agent.config_changed(greek.clone()), []);
+        assert_eq!(
+            agent.desktop_changed(snapshot(&["br"], "br", true)).last(),
+            Some(&set_greek)
+        );
+        assert_eq!(agent.desktop_changed(snapshot(&["br"], "br", true)), []);
+        assert_eq!(
+            agent.desktop_changed(snapshot(&["br", "us"], "br", true)),
+            [set_greek]
+        );
+        assert_eq!(agent.config_changed(greek), []);
+        assert_eq!(
+            agent.config_changed(Config::default()),
+            [AgentAction::SetLanguage(None)]
+        );
+        assert_eq!(agent.desktop_changed(snapshot(&["br"], "br", true)), []);
     }
 
     #[test]

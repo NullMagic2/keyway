@@ -140,7 +140,7 @@ write_tree() {
         third_party_notices
     } > "$doc_dir/copyright"
 
-    printf '%s (%s) stable; urgency=medium\n\n  * A screenshot tool now covers the on-screen keyboard, so it can be captured.\n\n -- %s  %s\n' \
+    printf '%s (%s) stable; urgency=medium\n\n  * The taskbar menu sets the language of Keyway, which now speaks Spanish too.\n  * Each key of the on-screen keyboard shows what Shift and AltGr type on it.\n  * It follows Shift, Alt and AltGr held on the real keyboard.\n  * Accents and brackets that a layout has on Shift get keys of their own beside them.\n\n -- %s  %s\n' \
         "$PACKAGE_NAME" "$2" "$maintainer" "$(date -R)" \
         | gzip -9n > "$doc_dir/changelog.gz"
 }
